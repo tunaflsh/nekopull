@@ -7,13 +7,13 @@ apikey = "YOUR-API-KEY"
 # Sub levels to accept: 0 official, 1 lightly edited official, 2 small fansubs,
 # 3 full fansubs. Unset means any level; the highest accepted one wins.
 [defaults]
-# levels = [2, 3]
-# codec = "h265"            # h264 h265 av1 vp9 mpeg2 xvid wmv vc1
-# type = "web_dl"           # web_dl bd_remux dvd_raw ...
+levels = [2, 3]
+codec = "h265"            # h264 h265 av1 vp9 mpeg2 xvid wmv vc1
+type = "web_dl"           # web_dl bd_remux dvd_raw ...
 resolutions = ["1080p"]
 batch = false
-# private_magnet = true    # private magnet carries your passkey; false = public
-# groups = ["erai-raws"]   # preference only, never a filter
+private_magnet = true    # private magnet carries your passkey; false = public
+groups = ["erai-raws"]   # preference only, never a filter
 
 [client]
 type = "transmission"
@@ -33,5 +33,5 @@ name = "towa no yuugure"
 [[show]]
 media_id = "s4147"
 name = "enen no shouboutai"
-# levels = [0, 1]
-# begin = "S03E07"         # per show only: S03, 3x07, or an absolute number like 55
+levels = [0, 1]
+begin = "S03E07"         # per show only: S03, 3x07, or an absolute number like 55
