@@ -371,10 +371,29 @@ class ConfigTest(unittest.TestCase):
             merged = config.defaults.merged(config.shows[0].overrides())
             self.assertEqual(merged.begin, (3, 7))
 
+    def test_begin_accepts_absolute_numbers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[defaults]\nbegin = 55\n\n'
+                '[[show]]\nmedia_id = "s1"\nbegin = "3x07"\n',
+            )
+            config = load_config(path, migrate=False)
+            self.assertEqual(config.defaults.begin, 55)
+            merged = config.defaults.merged(config.shows[0].overrides())
+            self.assertEqual(merged.begin, (3, 7))
+
+    def test_absolute_begin_filters_by_absolute_number(self):
+        settings = Defaults(begin=55)
+        self.assertFalse(passes_filters(make_release(absolute=54), settings))
+        self.assertTrue(passes_filters(make_release(absolute=55), settings))
+        # an unmapped release has no absolute number, so it is not filtered out
+        self.assertTrue(passes_filters(make_release(absolute=None), settings))
+
     def test_invalid_begin_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
-                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nbegin = "3x07"\n'
+                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nbegin = "later"\n'
             )
             with self.assertRaises(ConfigError):
                 load_config(path, migrate=False)

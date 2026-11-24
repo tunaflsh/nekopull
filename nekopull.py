@@ -77,6 +77,7 @@ class Release:
     group: str | None = None
     season: int = 0
     episode: int = 0
+    absolute: int | None = None
     batch: bool = False
 
     @property
@@ -218,15 +219,19 @@ def release_from_item(
         for episode_id in item.get("media_episode_ids") or []
         if str(episode_id) in episodes
     ]
+    absolute = None
     if len(mapped) == 1:
         season = int(mapped[0].get("season") or 0)
         episode = int(mapped[0].get("episode") or 0)
+        absolute = int(mapped[0].get("absolute") or 0) or None
     elif mapped:
         # Several episodes means a pack; track it per season rather than per episode.
         season = min(int(entry.get("season") or 0) for entry in mapped)
         episode = 0
     else:
         season, episode, _ = parse_episode(clean)
+        if season == 0 and episode > 0:
+            absolute = episode
         season, episode = _normalise_fallback(season, episode, episodes)
 
     magnet = str(
@@ -248,6 +253,7 @@ def release_from_item(
         group=group,
         season=season,
         episode=episode,
+        absolute=absolute,
         batch=bool(item.get("batch")),
     )
 
@@ -523,16 +529,25 @@ def _as_list(value) -> list:
     return list(value) if isinstance(value, (list, tuple)) else [value]
 
 
-_BEGIN = re.compile(r"(?i)^\s*S(\d{1,2})(?:E(\d{1,3}))?\s*$")
+_BEGIN_SEASON = re.compile(r"(?i)^\s*S(\d{1,2})(?:E(\d{1,3}))?\s*$")
+_BEGIN_CROSS = re.compile(r"(?i)^\s*(\d{1,2})x(\d{1,3})\s*$")
+_BEGIN_ABSOLUTE = re.compile(r"^\s*(\d{1,4})\s*$")
 
 
-def _begin_value(path: Path, where: str, value) -> tuple[int, int] | None:
+def _begin_value(path: Path, where: str, value) -> tuple[int, int] | int | None:
+    """Parse ``begin``: ``S03``/``S03E07``/``3x07`` as a pair, or an absolute number."""
     if value is None:
         return None
-    match = _BEGIN.match(str(value))
-    if not match:
-        raise ConfigError(f"{path}: {where} `begin` must look like S03 or S03E07")
-    return int(match.group(1)), int(match.group(2) or 0)
+    text = str(value).strip()
+    match = _BEGIN_SEASON.match(text) or _BEGIN_CROSS.match(text)
+    if match:
+        return int(match.group(1)), int(match.group(2) or 0)
+    match = _BEGIN_ABSOLUTE.match(text)
+    if match and not isinstance(value, float):
+        return int(match.group(1))
+    raise ConfigError(
+        f"{path}: {where} `begin` must be S03, S03E07, 3x07, or an absolute episode number"
+    )
 
 
 def _video_type_list(path: Path, where: str, value) -> list[str] | None:
@@ -964,8 +979,12 @@ def passes_filters(release: Release, settings: Defaults) -> bool:
         return False
     if settings.resolutions and release.resolution not in settings.resolutions:
         return False
-    if settings.begin is not None and release.episode_key < settings.begin:
-        return False
+    if settings.begin is not None:
+        if isinstance(settings.begin, tuple):
+            if release.episode_key < settings.begin:
+                return False
+        elif release.absolute is not None and release.absolute < settings.begin:
+            return False
     if settings.levels and release.level not in settings.levels:
         return False
     if settings.codecs and release.codec not in settings.codecs:
@@ -1079,6 +1098,12 @@ def _select_shows(config: Config, wanted: list[str] | None) -> list[Show]:
     return chosen
 
 
+def _format_value(value) -> str:
+    if isinstance(value, tuple) and len(value) == 2:
+        return f"S{value[0]:02d}E{value[1]:02d}"
+    return str(value)
+
+
 def command_lookup(options: argparse.Namespace) -> int:
     results = lookup_media(options.query, limit=options.limit)
     if not results:
@@ -1099,7 +1124,7 @@ def command_list(config: Config) -> int:
             for key, value in show.overrides().items()
             if value is not None
         }
-        extra = " ".join(f"{key}={value}" for key, value in overrides.items())
+        extra = " ".join(f"{key}={_format_value(value)}" for key, value in overrides.items())
         print(f"{show.media_id:>10}  {show.name}" + (f"  ({extra})" if extra else ""))
     return 0
 
