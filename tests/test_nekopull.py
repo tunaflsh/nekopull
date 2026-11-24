@@ -679,6 +679,124 @@ class TransmissionTest(unittest.TestCase):
             client.version()
 
 
+class HttpTest(unittest.TestCase):
+    def test_retries_after_a_429(self):
+        calls = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                calls.append(1)
+                if len(calls) == 1:
+                    self.send_response(429)
+                    self.send_header("Retry-After", "1")
+                    self.end_headers()
+                    return
+                body = b"ok"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with mock.patch("nekopull.time.sleep"):
+                body = nekopull.http_get(f"http://127.0.0.1:{server.server_address[1]}/")
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(body, b"ok")
+        self.assertEqual(len(calls), 2)
+
+    def test_lookup_media(self):
+        payload = '{"data": {"results": [{"id": "s1", "title": "One"}]}}'
+        with mock.patch("nekopull.http_get", return_value=payload.encode()):
+            results = nekopull.lookup_media("one")
+        self.assertEqual(results[0]["id"], "s1")
+
+    def test_lookup_media_error(self):
+        with mock.patch("nekopull.http_get", return_value=b'{"error": true, "message": "no"}'):
+            with self.assertRaises(nekopull.NekobtError):
+                nekopull.lookup_media("one")
+
+
+class CommandsTest(unittest.TestCase):
+    def _config(self, tmp: str, shows: str = '[[show]]\nmedia_id = "s1"\nname = "one"\n'):
+        return load_config(write_config(tmp, 'apikey = "k"\n\n' + shows), migrate=False)
+
+    def test_select_shows_by_name_and_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config(
+                tmp,
+                '[[show]]\nmedia_id = "s1"\nname = "one"\n\n'
+                '[[show]]\nmedia_id = "s2"\nname = "two"\n',
+            )
+            self.assertEqual([s.media_id for s in nekopull._select_shows(config, ["two"])], ["s2"])
+            self.assertEqual([s.media_id for s in nekopull._select_shows(config, ["S1"])], ["s1"])
+            with self.assertRaises(ConfigError):
+                nekopull._select_shows(config, ["nope"])
+
+    def test_dry_run_adds_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config(tmp)
+            options = SimpleNamespace(dry_run=True, show=None)
+            with mock.patch("nekopull.fetch_releases", return_value=[make_release()]), \
+                    mock.patch("nekopull.make_client", side_effect=AssertionError("client used")):
+                self.assertEqual(nekopull.command_run(config, options), 0)
+            with State(config.state_path) as state:
+                self.assertFalse(state.has_episode("s1", 1, 1))
+
+    def test_verify_reports_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config(tmp)
+            client = SimpleNamespace(version=lambda: "4.0.6")
+            with mock.patch("nekopull.fetch_releases", return_value=[]), \
+                    mock.patch("nekopull.make_client", return_value=client), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(nekopull.command_verify(config), 0)
+            with mock.patch("nekopull.fetch_releases", side_effect=nekopull.NekobtError("down")), \
+                    mock.patch("nekopull.make_client", return_value=client), \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(nekopull.command_verify(config), 1)
+
+
+class CliTest(unittest.TestCase):
+    def test_parser_wires_commands(self):
+        parser = nekopull.build_parser()
+        self.assertEqual(parser.parse_args(["run", "--dry-run"]).dry_run, True)
+        self.assertEqual(parser.parse_args(["lookup", "x"]).command, "lookup")
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as exit_info:
+            parser.parse_args(["--version"])
+        self.assertEqual(exit_info.exception.code, 0)
+
+    def test_lookup_command_prints_results(self):
+        options = SimpleNamespace(query="one", limit=5)
+        buffer = io.StringIO()
+        with mock.patch(
+            "nekopull.lookup_media",
+            return_value=[{"id": "s1", "year": 2025, "title": "One"}],
+        ), contextlib.redirect_stdout(buffer):
+            self.assertEqual(nekopull.command_lookup(options), 0)
+        self.assertIn("s1", buffer.getvalue())
+
+    def test_lookup_command_without_matches(self):
+        options = SimpleNamespace(query="nope", limit=5)
+        with mock.patch("nekopull.lookup_media", return_value=[]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(nekopull.command_lookup(options), 1)
+
+    def test_secret_tool_detection(self):
+        with mock.patch("nekopull.shutil.which", return_value="/usr/bin/secret-tool"):
+            self.assertTrue(nekopull.secret_tool_available())
+        with mock.patch("nekopull.shutil.which", return_value=None):
+            self.assertFalse(nekopull.secret_tool_available())
+
+
 class ClientRegistryTest(unittest.TestCase):
     def test_transmission_is_registered(self):
         self.assertIsInstance(make_client(ClientConfig()), Transmission)
