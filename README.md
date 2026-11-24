@@ -86,7 +86,7 @@ One block per show.
 | key | meaning |
 | --- | --- |
 | `media_id` | required; find it with `nekopull lookup` (`annotate` comments the title next to it) |
-| `begin` | first episode to consider, per show only |
+| `begin` | first episode to consider; e.g. `S03`, `S03E07`, `3x07` or an absolute number |
 
 Keys from `[defaults]` may be set here too; they win over the defaults.
 
@@ -110,13 +110,6 @@ your `groups`, then the highest accepted sub level; then the newest release in t
 Only episodes that have aired are taken. A release whose episode nekoBT has not
 mapped is accepted only up to the latest aired episode, so a mislabelled release
 (`S05E14` for a 12-episode season) or a pre-air stays out.
-
-`begin` is not a default: it belongs to one show, since it says how far you are
-into that series. Set it on a `[[show]]` as `S03`, `S03E07`, `3x07` or an
-absolute number. It compares against the episode the site resolved, so it works
-for shows numbered absolutely; an absolute `begin` can only filter releases
-whose episode nekoBT knows — a torrent with no Media Episodes set is never
-skipped.
 
 **Sub levels** describe how much work went into the subtitles:
 
