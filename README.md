@@ -34,8 +34,7 @@ python3 -m venv .venv && .venv/bin/pip install .
    url = "http://127.0.0.1:9091/transmission/rpc"
 
    [[show]]
-   media_id = "s1539"
-   name = "towa no yuugure"
+   media_id = "s1539"  # Dusk Beyond the End of the World
    ```
 
 3. Check it, then commit:
@@ -87,7 +86,6 @@ One block per show.
 | key | meaning |
 | --- | --- |
 | `media_id` | required; find it with `nekopull lookup` (`annotate` comments the title next to it) |
-| `name` | optional label for logs and client tags — falls back to nekoBT's own title |
 | `begin` | first episode to consider, per show only |
 
 Keys from `[defaults]` may be set here too; they win over the defaults.
@@ -181,7 +179,7 @@ back in the file and it will be stored again.
 | --- | --- |
 | `nekopull run` | poll every show, add new episodes |
 | `nekopull run --dry-run` | report only, add nothing |
-| `nekopull run --show NAME` | restrict to one show (repeatable) |
+| `nekopull run --show MEDIA_ID` | restrict to one show (repeatable) |
 | `nekopull lookup TEXT` | find show ids |
 | `nekopull list` | show configuration and overrides |
 | `nekopull annotate` | write nekoBT's title beside each `media_id` (`--dry-run` to preview) |

@@ -340,7 +340,7 @@ class FetchTest(unittest.TestCase):
 class ConfigTest(unittest.TestCase):
     def test_minimal(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nname = "one"\n')
+            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n')
             config = load_config(path, migrate=False)
             self.assertEqual(config.apikey, "k")
             self.assertEqual(config.apikey_source, "config file")
@@ -400,11 +400,19 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(config.shows[1].begin, (3, 7))
             self.assertEqual(config.defaults.merged(config.shows[0].overrides()).levels, [])
 
-    def test_name_is_optional(self):
+    def test_name_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n')
+            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nname = "one"\n')
+            with self.assertRaises(ConfigError):
+                load_config(path, migrate=False)
+
+    def test_annotations_are_read_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"  # Canonical One\n'
+            )
             config = load_config(path, migrate=False)
-            self.assertIsNone(config.shows[0].name)
+            self.assertEqual(config.annotations, {"s1": "Canonical One"})
 
     def test_list_falls_back_to_the_media_id(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -466,12 +474,12 @@ class ConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
                 tmp,
-                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ntype = ["web_dl"]\n'
+                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"  # Canonical One\n'
+                'type = ["web_dl"]\n'
                 'batch = true\nbegin = "S01E05"\n',
             )
             buffer = io.StringIO()
-            with mock.patch("nekopull.media_title", return_value="Canonical One"), \
-                    contextlib.redirect_stdout(buffer):
+            with contextlib.redirect_stdout(buffer):
                 nekopull.command_list(load_config(path, migrate=False))
             output = buffer.getvalue()
             self.assertIn("Canonical One", output)
@@ -770,17 +778,16 @@ class HttpTest(unittest.TestCase):
 
 
 class CommandsTest(unittest.TestCase):
-    def _config(self, tmp: str, shows: str = '[[show]]\nmedia_id = "s1"\nname = "one"\n'):
+    def _config(self, tmp: str, shows: str = '[[show]]\nmedia_id = "s1"\n'):
         return load_config(write_config(tmp, 'apikey = "k"\n\n' + shows), migrate=False)
 
-    def test_select_shows_by_name_and_id(self):
+    def test_select_shows_by_media_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = self._config(
                 tmp,
-                '[[show]]\nmedia_id = "s1"\nname = "one"\n\n'
-                '[[show]]\nmedia_id = "s2"\nname = "two"\n',
+                '[[show]]\nmedia_id = "s1"\n\n[[show]]\nmedia_id = "s2"\n',
             )
-            self.assertEqual([s.media_id for s in nekopull._select_shows(config, ["two"])], ["s2"])
+            self.assertEqual([s.media_id for s in nekopull._select_shows(config, ["s2"])], ["s2"])
             self.assertEqual([s.media_id for s in nekopull._select_shows(config, ["S1"])], ["s1"])
             with self.assertRaises(ConfigError):
                 nekopull._select_shows(config, ["nope"])
@@ -839,7 +846,7 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
                 tmp,
-                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nname = "one"\n\n'
+                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n\n'
                 '[[show]]\n# nekoBT title: stale\nmedia_id = "s2"\nbegin = "S01E05"\n',
             )
             titles = {"s1": "Canonical One", "s2": "Canonical Two"}
@@ -850,7 +857,6 @@ class CliTest(unittest.TestCase):
             text = path.read_text()
             self.assertIn('media_id = "s1"  # Canonical One', text)
             self.assertIn('media_id = "s2"  # Canonical Two', text)
-            self.assertIn('name = "one"', text)
             self.assertNotIn("nekoBT title:", text)
             self.assertIn('begin = "S01E05"', text)
 

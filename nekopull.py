@@ -518,7 +518,6 @@ class Defaults:
 @dataclass(slots=True)
 class Show:
     media_id: str
-    name: str | None = None
     levels: list[int] | None = None
     codecs: list[str] | None = None
     video_types: list[str] | None = None
@@ -566,12 +565,12 @@ class Config:
     shows: list[Show]
     client: ClientConfig = field(default_factory=ClientConfig)
     state_path: Path = STATE_PATH
+    annotations: dict[str, str] = field(default_factory=dict)
 
 
 _TOP_LEVEL_KEYS = {"apikey", "state_path", "defaults", "show", "client"}
 _SHOW_KEYS = {
     "media_id",
-    "name",
     "begin",
     "levels",
     "codec",
@@ -707,8 +706,6 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
         media_id = entry.get("media_id")
         if not media_id:
             raise ConfigError(f"{path}: show #{index} is missing `media_id`")
-        if "name" in entry and not str(entry["name"]).strip():
-            raise ConfigError(f"{path}: show #{index}: `name` must not be empty")
         for boolean_key in ("batch", "private_magnet"):
             if boolean_key in entry and not isinstance(entry[boolean_key], bool):
                 raise ConfigError(
@@ -717,7 +714,6 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
         shows.append(
             Show(
                 media_id=str(media_id),
-                name=entry.get("name"),
                 levels=entry.get("levels"),
                 codecs=_codec_list(path, f"show #{index}", entry.get("codec")),
                 video_types=_video_type_list(path, f"show #{index}", entry.get("type")),
@@ -758,7 +754,27 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
         )
 
     state_path = Path(raw.get("state_path", path.parent / "state.db"))
-    return Config(apikey, apikey_source, defaults, shows, client, state_path)
+    return Config(
+        apikey,
+        apikey_source,
+        defaults,
+        shows,
+        client,
+        state_path,
+        _annotations(path),
+    )
+
+
+def _annotations(path: Path) -> dict[str, str]:
+    """Titles annotate wrote beside media ids, so list does not need the API."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return {}
+    found: dict[str, str] = {}
+    for match in re.finditer(r'^\s*media_id\s*=\s*"([^"]+)"\s*#\s*(.+?)\s*$', text, re.M):
+        found[match.group(1)] = match.group(2)
+    return found
 
 
 def _credential(
@@ -1119,7 +1135,7 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
         client = None if options.dry_run else make_client(config.client)
         for show in selected:
             settings = config.defaults.merged(show.overrides())
-            label = show.name or show.media_id
+            label = show.media_id
             try:
                 releases, feed_title = fetch_feed(
                     config.apikey,
@@ -1134,7 +1150,7 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                 LOG.error("%s: %s", label, exc)
                 failures += 1
                 continue
-            label = show.name or feed_title or show.media_id
+            label = feed_title or show.media_id
             picks = select(
                 releases, settings, media_id=show.media_id, state=state, begin=show.begin
             )
@@ -1168,8 +1184,7 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
 def _select_shows(config: Config, wanted: list[str] | None) -> list[Show]:
     if not wanted:
         return config.shows
-    lookup = {show.name.lower(): show for show in config.shows if show.name}
-    lookup.update({show.media_id.lower(): show for show in config.shows})
+    lookup = {show.media_id.lower(): show for show in config.shows}
     chosen = []
     for name in wanted:
         show = lookup.get(name.lower())
@@ -1198,16 +1213,8 @@ def command_lookup(options: argparse.Namespace) -> int:
 
 
 def command_list(config: Config) -> int:
-    resolved: dict[str, str] = {}
     for show in config.shows:
-        display_name = show.name
-        if display_name is None:
-            if show.media_id not in resolved:
-                try:
-                    resolved[show.media_id] = media_title(config.apikey, show.media_id) or ""
-                except NekobtError:
-                    resolved[show.media_id] = ""
-            display_name = resolved[show.media_id] or show.media_id
+        display_name = config.annotations.get(show.media_id) or show.media_id
         display = {"video_types": "type", "allow_batch": "batch"}
         overrides = {
             display.get(key, key): value
@@ -1290,8 +1297,7 @@ def command_verify(config: Config) -> int:
         print(f"nekoBT: {exc}", file=sys.stderr)
         failures += 1
     else:
-        first = config.shows[0]
-        print(f"api key: works ({len(releases)} release(s) for {first.name or first.media_id})")
+        print(f"api key: works ({len(releases)} release(s) for {config.shows[0].media_id})")
     try:
         version = make_client(config.client).version()
     except ClientError as exc:

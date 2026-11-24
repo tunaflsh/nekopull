@@ -24,14 +24,13 @@ download_dir = "/data/torrents/anime"
 username = ""
 password = ""
 
-# One block per show; find ids with `nekopull lookup "title"`.
+# One block per show; find ids with `nekopull lookup "title"`, and run
+# `nekopull annotate` to put the title beside each media_id as a comment.
 [[show]]
-media_id = "s1539"
-name = "towa no yuugure"
+media_id = "s1539"   # Dusk Beyond the End of the World
 
 # Per-show keys override [defaults], and private_magnet can be set here too:
 [[show]]
-media_id = "s4147"
-name = "enen no shouboutai"
+media_id = "s4147"   # Fire Force
 levels = [0, 1]
 begin = "S03E07"         # per show only: S03, 3x07, or an absolute number like 55
