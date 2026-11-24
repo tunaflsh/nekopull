@@ -8,6 +8,7 @@ url='https://github.com/tunaflsh/nekopull'
 license=('MIT')
 depends=('python')
 optdepends=('libsecret: keep the API key in the Secret Service')
+install=nekopull.install
 makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')  # run updpkgsums once the tag exists
@@ -27,6 +28,6 @@ package() {
   python3 -m installer --destdir="$pkgdir" dist/*.whl
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 config.example.toml "$pkgdir/usr/share/doc/$pkgname/config.example.toml"
-  install -Dm644 contrib/nekopull.service "$pkgdir/usr/lib/systemd/user/nekopull.service"
-  install -Dm644 contrib/nekopull.timer "$pkgdir/usr/lib/systemd/user/nekopull.timer"
+  install -Dm644 systemd/nekopull.service "$pkgdir/usr/lib/systemd/user/nekopull.service"
+  install -Dm644 systemd/nekopull.timer "$pkgdir/usr/lib/systemd/user/nekopull.timer"
 }
