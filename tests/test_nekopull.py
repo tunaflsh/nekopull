@@ -234,6 +234,38 @@ class FilterTest(unittest.TestCase):
             rank(make_release(level=3), settings), rank(make_release(level=0), settings)
         )
 
+    def test_resolution_order_breaks_a_tie(self):
+        settings = Defaults(resolutions=["1080p", "720p"])
+        hd = make_release(resolution="1080p")
+        sd = make_release(resolution="720p")
+        self.assertLess(rank(hd, settings), rank(sd, settings))
+
+    def test_group_beats_resolution(self):
+        settings = Defaults(resolutions=["1080p", "720p"], groups=["erai-raws"])
+        wanted = make_release(resolution="720p", group="erai-raws")
+        other = make_release(resolution="1080p", group="toonshub")
+        self.assertLess(rank(wanted, settings), rank(other, settings))
+
+    def test_level_beats_type_and_codec(self):
+        settings = Defaults(
+            resolutions=["1080p"], video_types=["web_dl", "web_encode"], codecs=["h265", "h264"]
+        )
+        better_subs = make_release(level=3, video_type="web_encode", codec="h264")
+        nicer_source = make_release(level=0, video_type="web_dl", codec="h265")
+        self.assertLess(rank(better_subs, settings), rank(nicer_source, settings))
+
+    def test_type_then_codec_break_ties(self):
+        settings = Defaults(
+            resolutions=["1080p"], video_types=["web_dl", "web_encode"], codecs=["h265", "h264"]
+        )
+        web = make_release(video_type="web_dl", codec="h264")
+        encode = make_release(video_type="web_encode", codec="h265")
+        self.assertLess(rank(web, settings), rank(encode, settings))
+        self.assertLess(
+            rank(make_release(codec="h265"), settings),
+            rank(make_release(codec="h264"), settings),
+        )
+
     def test_group_preference_wins_ties(self):
         settings = Defaults(resolutions=["1080p"], groups=["Erai-raws"])
         wanted = make_release(group="erai-raws")

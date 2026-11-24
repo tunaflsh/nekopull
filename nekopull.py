@@ -1086,12 +1086,32 @@ def passes_filters(
     return True
 
 
+def _preference(value: str | None, order: list) -> int:
+    """Position of ``value`` in a configured order; 0 when there is no order."""
+    if not order:
+        return 0
+    try:
+        return order.index(value)
+    except ValueError:
+        return len(order)
+
+
 def rank(release: Release, settings: Defaults) -> tuple:
-    """Sort key: preferred group, then highest sub level."""
+    """Sort key: group, resolution, sub level, release type, codec.
+
+    Each configured list doubles as a preference order, so the first entry wins
+    a tie. Anything still tied falls back to feed order, i.e. the newest release.
+    """
     preferred = {group.lower() for group in settings.groups}
     group_rank = 0 if not preferred else (0 if (release.group or "").lower() in preferred else 1)
     level = release.level if release.level is not None else -1
-    return (group_rank, -level)
+    return (
+        group_rank,
+        _preference(release.resolution, settings.resolutions),
+        -level,
+        _preference(release.video_type, settings.video_types),
+        _preference(release.codec, settings.codecs),
+    )
 
 
 def select(

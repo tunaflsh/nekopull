@@ -105,7 +105,9 @@ Any key here can also be set on a single `[[show]]` to override it.
 | `private_magnet` | `true` | hand over your private magnet (carries your passkey) |
 
 One release is taken per episode. When several match, the order of preference is
-your `groups`, then the highest accepted sub level; then the newest release in the feed.
+`groups`, then `resolutions`, then the highest accepted sub level, then `type`,
+then `codec`. Each list doubles as a preference order, so put the value you want
+first; anything still tied is the newest release in the feed.
 
 Only episodes that have aired are taken. A release whose episode nekoBT has not
 mapped is accepted only up to the latest aired episode, so a mislabelled release
