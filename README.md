@@ -56,10 +56,23 @@ python3 -m venv .venv && .venv/bin/pip install .
 
    `nekopull.service` is a oneshot unit and `nekopull.timer` fires it at 04:00
    every day, with `Persistent=true` so a run missed while the machine was off
-   happens at the next boot. To pick another time, edit `OnCalendar=` in the
-   timer and run `systemctl --user daemon-reload`.
+   happens at the next boot.
 
-   Logs go to the journal: `journalctl --user -u nekopull`.
+   For another time, override the packaged unit instead of editing it:
+
+   ```sh
+   systemctl --user edit nekopull.timer
+   ```
+
+   ```ini
+   [Timer]
+   OnCalendar=
+   OnCalendar=*-*-* 06:00:00
+   ```
+
+   The empty assignment resets the packaged schedule; without it both would
+   fire. `systemctl edit` reloads configuration itself, so the running timer
+   picks up the new value.
 
 ## Configuration
 
