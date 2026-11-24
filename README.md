@@ -79,8 +79,13 @@ python3 -m venv .venv && .venv/bin/pip install .
    `nekopull daemon` resolves the credentials once at start-up and keeps them
    in memory, polling every `--interval` (default `1d`). The keyring is asked
    only when the login session starts — while you are there — and the later
-   polls never touch it, so no passphrase has to survive in an agent. Restart
-   the unit after editing the config.
+   polls never touch it, so no passphrase has to survive in an agent.
+
+   The config is re-read before every poll, so adding shows or changing filters
+   takes effect on the next cycle without a restart. Credentials are the
+   exception: a stubbed value stays in memory, and only a literal value (or a
+   restart) replaces it. Changing `--interval` is a unit edit, so restart for
+   that.
 
    To use a different time, add a drop-in:
 

@@ -648,7 +648,12 @@ def _codec_list(path: Path, where: str, value) -> list[str] | None:
     return codecs
 
 
-def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Config:
+def load_config(
+    path: Path | str = CONFIG_PATH,
+    *,
+    migrate: bool = True,
+    cache: dict[str, str] | None = None,
+) -> Config:
     path = Path(path)
     try:
         with path.open("rb") as handle:
@@ -666,9 +671,10 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
         )
 
     stash = migrate and secret_tool_available()
+    secrets = {} if cache is None else cache
     stubbed: list[str] = []
     apikey = _credential(
-        path, raw, "apikey", "apikey", stash=stash, stubbed=stubbed, required=True
+        path, raw, "apikey", "apikey", stash=stash, stubbed=stubbed, required=True, cache=secrets
     )
     if str(raw.get("apikey")) == APIKEY_STUB:
         apikey_source = f"libsecret ({SECRET_SERVICE}/{SECRET_APIKEY})"
@@ -740,10 +746,22 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
         type=client_type,
         url=client_raw.get("url", DEFAULT_CLIENT_URL),
         username=_credential(
-            path, client_raw, "username", "client-username", stash=stash, stubbed=stubbed
+            path,
+            client_raw,
+            "username",
+            "client-username",
+            stash=stash,
+            stubbed=stubbed,
+            cache=secrets,
         ),
         password=_credential(
-            path, client_raw, "password", "client-password", stash=stash, stubbed=stubbed
+            path,
+            client_raw,
+            "password",
+            "client-password",
+            stash=stash,
+            stubbed=stubbed,
+            cache=secrets,
         ),
         download_dir=client_raw.get("download_dir"),
     )
@@ -786,6 +804,7 @@ def _credential(
     stash: bool,
     stubbed: list[str],
     required: bool = False,
+    cache: dict[str, str] | None = None,
 ) -> str:
     value = table.get(key)
     if value is None or value == "":
@@ -794,8 +813,12 @@ def _credential(
         return ""
     value = str(value)
     if value == APIKEY_STUB:
+        if cache is not None and name in cache:
+            return cache[name]
         stored = read_secret(name)
         if stored is not None:
+            if cache is not None:
+                cache[name] = stored
             return stored
         raise ConfigError(
             f"{path}: no {name} in libsecret. Put it back as {key} = \"...\""
@@ -803,6 +826,8 @@ def _credential(
         )
     if stash and store_secret(name, value):
         stubbed.append(key)
+    if cache is not None:
+        cache[name] = value
     return value
 
 
@@ -1154,11 +1179,16 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
 def command_daemon(config: Config, options: argparse.Namespace) -> int:
     """Poll on an interval, keeping the resolved secrets in memory."""
     interval = _parse_interval(options.interval)
+    secrets: dict[str, str] = {}
     LOG.info(
         "holding credentials in memory for the life of the process; polling every %s",
         options.interval,
     )
     while True:
+        try:
+            config = load_config(options.config, migrate=False, cache=secrets)
+        except ConfigError as exc:
+            LOG.error("config reload failed (%s); keeping the previous one", exc)
         try:
             _run_once(config, dry_run=options.dry_run)
         except KeyboardInterrupt:

@@ -931,13 +931,36 @@ class CliTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             nekopull._parse_interval("daily")
 
+    def test_secrets_are_reused_only_when_still_stubbed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n')
+            cache: dict[str, str] = {}
+            with mock.patch("nekopull.secret_tool_available", return_value=True), \
+                    mock.patch("nekopull.read_secret", return_value="first") as read:
+                load_config(path, migrate=False, cache=cache)
+                # a later reload must not hit the keyring again
+                path.write_text('apikey = "libsecret"\n\n[[show]]\nmedia_id = "s2"\n')
+                config = load_config(path, migrate=False, cache=cache)
+            self.assertEqual(read.call_count, 1)
+            self.assertEqual(config.apikey, "first")
+            self.assertEqual([s.media_id for s in config.shows], ["s2"])
+
+    def test_a_new_literal_overrides_the_cached_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n')
+            cache: dict[str, str] = {}
+            with mock.patch("nekopull.secret_tool_available", return_value=True), \
+                    mock.patch("nekopull.read_secret", return_value="old"):
+                load_config(path, migrate=False, cache=cache)
+            path.write_text('apikey = "new"\n\n[[show]]\nmedia_id = "s1"\n')
+            self.assertEqual(load_config(path, migrate=False, cache=cache).apikey, "new")
+            self.assertEqual(cache["apikey"], "new")
+
     def test_daemon_runs_then_sleeps(self):
         with tempfile.TemporaryDirectory() as tmp:
-            config = load_config(
-                write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n'),
-                migrate=False,
-            )
-            options = SimpleNamespace(interval="1h", dry_run=False)
+            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n')
+            config = load_config(path, migrate=False)
+            options = SimpleNamespace(interval="1h", dry_run=False, config=path)
             with mock.patch("nekopull._run_once") as run, \
                     mock.patch("nekopull.time.sleep", side_effect=KeyboardInterrupt):
                 with self.assertRaises(KeyboardInterrupt):
