@@ -1300,7 +1300,16 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
 
 def command_daemon(config: Config, options: argparse.Namespace) -> int:
     """Poll on an interval, watching the config file for changes."""
+    # main already resolved these; seed the cache so the first poll does not
+    # ask the keyring again (which shows up as a second prompt/notification).
     secrets: dict[str, str] = {}
+    if config.apikey:
+        secrets["apikey"] = config.apikey
+    if config.client.username:
+        secrets["client-username"] = config.client.username
+    if config.client.password:
+        secrets["client-password"] = config.client.password
+
     path = Path(options.config)
     interval = _daemon_interval(config, options)
     LOG.info(
@@ -1310,13 +1319,17 @@ def command_daemon(config: Config, options: argparse.Namespace) -> int:
     )
     stamp = _config_mtime(path)
     next_poll = 0.0
+    first = True
     while True:
         now = time.monotonic()
         if now >= next_poll:
-            try:
-                config = load_config(path, migrate=False, cache=secrets)
-            except ConfigError as exc:
-                LOG.error("config reload failed (%s); keeping the previous one", exc)
+            if first:
+                first = False
+            else:
+                try:
+                    config = load_config(path, migrate=False, cache=secrets)
+                except ConfigError as exc:
+                    LOG.error("config reload failed (%s); keeping the previous one", exc)
             interval = _daemon_interval(config, options)
             try:
                 _run_once(config, dry_run=options.dry_run)

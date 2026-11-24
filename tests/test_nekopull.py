@@ -1088,6 +1088,30 @@ class CliTest(unittest.TestCase):
             self.assertEqual(load_config(path, migrate=False, cache=cache).apikey, "new")
             self.assertEqual(cache["apikey"], "new")
 
+    def test_daemon_reuses_the_secrets_main_resolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "libsecret"\n\n[client]\nusername = "libsecret"\n'
+                'password = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n',
+            )
+            stored = {"apikey": "key", "client-username": "box", "client-password": "hunter2"}
+
+            def fake_run(args, **kwargs):
+                return SimpleNamespace(returncode=0, stdout=stored[args[-1]] + "\n", stderr="")
+
+            with mock.patch("nekopull.secret_tool_available", return_value=True), \
+                    mock.patch("nekopull.subprocess.run", side_effect=fake_run) as run:
+                config = load_config(path)
+                lookups_before = run.call_count
+                options = SimpleNamespace(interval="1h", dry_run=True, config=path)
+                with mock.patch("nekopull._run_once"), \
+                        mock.patch("nekopull.time.sleep", side_effect=KeyboardInterrupt):
+                    with self.assertRaises(KeyboardInterrupt):
+                        nekopull.command_daemon(config, options)
+            self.assertEqual(lookups_before, 3)  # one per credential, no re-write
+            self.assertEqual(run.call_count, 3)
+
     def test_daemon_runs_then_sleeps(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n')
