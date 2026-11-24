@@ -55,6 +55,20 @@ python3 -m venv .venv && .venv/bin/pip install .
    every day, with `Persistent=true` so a run missed while the machine was off
    happens at the next boot.
 
+   The timer also runs the service a minute after it is activated — so after
+   `enable --now` and after every login. That first run is where a keyring
+   password gets typed; make it count, because the 04:00 run is unattended:
+
+   ```ini
+   # ~/.gnupg/gpg-agent.conf
+   pinentry-program /usr/bin/pinentry-qt   # a unit has no terminal
+   default-cache-ttl 86400
+   max-cache-ttl 86400
+   ```
+
+   then `gpgconf --reload gpg-agent`. Without a GUI pinentry the lookup in the
+   unit fails; with a 2h default cache the unlock is gone before 04:00.
+
    To use a different time, add a drop-in:
 
    ```sh
