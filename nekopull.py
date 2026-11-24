@@ -55,7 +55,6 @@ STATE_PATH = Path(
 # --- release title parsing -------------------------------------------------
 
 _TAGS = re.compile(r"\s*\{Tags:([^}]*)\}\s*$")
-_TAG_LEVEL = re.compile(r"(?:^|;)L(\d+)(?:;|$)")
 _EP_SXXEYY = re.compile(r"(?i)\bS(\d{1,2})E(\d{1,3})(?:v(\d+))?\b")
 _EP_NXNN = re.compile(r"(?i)\b(\d{1,2})x(\d{1,3})(?:v(\d+))?\b")
 _EP_PREFIXED = re.compile(r"(?i)\bEP?(\d{1,4})(?:v(\d+))?\b")
@@ -135,14 +134,35 @@ class Release:
         return (self.season, self.episode)
 
 
-def strip_tags(title: str) -> tuple[str, int | None]:
-    """Split nekoBT's trailing ``{Tags:L0;V9;...}`` block off a title."""
+# nekoBT's video codec ids, discovered by probing ?video_codec=N and comparing
+# the returned releases: C1=h264, C2=h265, C3=av1, C4=vp9, C5=mpeg2.
+_CODEC_IDS = {"h264": 1, "h265": 2, "av1": 3, "vp9": 4, "mpeg2": 5}
+_CODEC_BY_INDEX = {index: name for name, index in _CODEC_IDS.items()}
+
+
+def split_tags(title: str) -> tuple[str, dict]:
+    """Split nekoBT's trailing ``{Tags:L0;V9;C1;A=ja;S=en;}`` block off a title.
+
+    Returns the title without the block and a dict of the parsed fields, e.g.
+    ``{"L": 0, "V": 9, "C": 1, "A": "ja", "S": "en"}``.
+    """
     match = _TAGS.search(title)
     if not match:
-        return title.strip(), None
-    level_match = _TAG_LEVEL.search(match.group(1))
-    level = int(level_match.group(1)) if level_match else None
-    return title[: match.start()].strip(), level
+        return title.strip(), {}
+    tags: dict = {}
+    for part in match.group(1).split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        flag = re.fullmatch(r"([A-Za-z]+)(\d+)", part)
+        if flag:
+            tags[flag.group(1)] = int(flag.group(2))
+        elif "=" in part:
+            key, value = part.split("=", 1)
+            tags[key.strip()] = value.strip()
+        else:
+            tags[part] = True
+    return title[: match.start()].strip(), tags
 
 
 def parse_episode(title: str) -> tuple[int, int, bool]:
@@ -170,8 +190,10 @@ def parse_release(
     title: str, magnet: str, *, size: int = 0
 ) -> Release:
     """Build a :class:`Release` from a feed item title and magnet link."""
-    clean, level = strip_tags(title)
+    clean, tags = split_tags(title)
     season, episode, proper = parse_episode(clean)
+    level = tags.get("L") if isinstance(tags.get("L"), int) else None
+    tagged_codec = _CODEC_BY_INDEX.get(tags.get("C")) if isinstance(tags.get("C"), int) else None
 
     resolution = _RESOLUTION.search(clean)
     codec_match = _CODEC.search(clean)
@@ -194,7 +216,8 @@ def parse_release(
         size=size,
         level=level,
         resolution=resolution.group(1).lower() if resolution else None,
-        codec=_CODEC_TOKENS.get(codec_match.group(1).lower()) if codec_match else None,
+        codec=tagged_codec
+        or (_CODEC_TOKENS.get(codec_match.group(1).lower()) if codec_match else None),
         source=_SOURCE_MAP.get(source_match.group(1).lower()) if source_match else None,
         group=group,
         season=season,
@@ -247,17 +270,33 @@ def _retry_after(value: str | None, attempt: int) -> int:
     return max(1, min(seconds, 120))
 
 
-def fetch_releases(apikey: str, media_id: str, *, limit: int = 100) -> list[Release]:
-    """Fetch every release nekoBT holds for ``media_id``."""
-    query = urllib.parse.urlencode(
-        {
-            "t": "search",
-            "batch": "false",
-            "limit": str(limit),
-            "apikey": apikey,
-            "media_id": media_id,
-        }
-    )
+def fetch_releases(
+    apikey: str,
+    media_id: str,
+    *,
+    limit: int = 100,
+    levels: list[int] | None = None,
+    codecs: list[str] | None = None,
+) -> list[Release]:
+    """Fetch every release nekoBT holds for ``media_id``.
+
+    ``levels`` and ``codecs`` are pushed to the API when they can be expressed
+    there, so the newest-100 window contains matching releases rather than
+    whatever happened to be uploaded.
+    """
+    params = {
+        "t": "search",
+        "batch": "false",
+        "limit": str(limit),
+        "apikey": apikey,
+        "media_id": media_id,
+    }
+    if levels:
+        params["levels"] = ",".join(str(level) for level in levels)
+    codec_ids = _codec_ids(codecs or [])
+    if codec_ids:
+        params["video_codec"] = ",".join(str(index) for index in codec_ids)
+    query = urllib.parse.urlencode(params)
     payload = http_get(f"{TORZNAB_URL}?{query}")
     try:
         root = ET.fromstring(payload)
@@ -279,6 +318,12 @@ def fetch_releases(apikey: str, media_id: str, *, limit: int = 100) -> list[Rele
             )
         )
     return releases
+
+
+def _codec_ids(codecs: list[str]) -> list[int]:
+    """API ids for every requested codec, or none if one of them has no id."""
+    mapped = [_CODEC_IDS[codec] for codec in codecs if codec in _CODEC_IDS]
+    return mapped if len(mapped) == len(codecs) else []
 
 
 def lookup_media(query: str, *, limit: int = 5) -> list[dict]:
@@ -850,7 +895,12 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
         for show in selected:
             settings = config.defaults.merged(show.overrides())
             try:
-                releases = fetch_releases(config.apikey, show.media_id)
+                releases = fetch_releases(
+                    config.apikey,
+                    show.media_id,
+                    levels=settings.levels,
+                    codecs=settings.codecs,
+                )
             except NekobtError as exc:
                 LOG.error("%s: %s", show.name, exc)
                 failures += 1

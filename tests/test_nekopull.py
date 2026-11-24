@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -30,7 +31,7 @@ from nekopull import (  # noqa: E402
     passes_filters,
     rank,
     select,
-    strip_tags,
+    split_tags,
 )
 
 MAGNET = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=x"
@@ -72,15 +73,19 @@ class EpisodeParsingTest(unittest.TestCase):
 
 
 class TagParsingTest(unittest.TestCase):
-    def test_level_extracted(self):
-        clean, level = strip_tags("Show - 08 [1080p] {Tags:L2;V9;C1;A=ja;S=en;}")
-        self.assertEqual(level, 2)
+    def test_fields_extracted(self):
+        clean, tags = split_tags("Show - 08 [1080p] {Tags:L2;V9;C1;A=ja;S=en;}")
         self.assertEqual(clean, "Show - 08 [1080p]")
+        self.assertEqual(tags, {"L": 2, "V": 9, "C": 1, "A": "ja", "S": "en"})
 
     def test_no_tags(self):
-        clean, level = strip_tags("Show - 08 [1080p]")
-        self.assertEqual(level, None)
+        clean, tags = split_tags("Show - 08 [1080p]")
         self.assertEqual(clean, "Show - 08 [1080p]")
+        self.assertEqual(tags, {})
+
+    def test_tag_codec_wins_over_the_title(self):
+        release = parse_release("[X] Show S01E01 1080p AVC {Tags:L0;V9;C2;}", MAGNET)
+        self.assertEqual(release.codec, "h265")
 
     def test_release_attributes(self):
         release = parse_release(
@@ -471,6 +476,43 @@ class _TransmissionHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+
+class FeedRequestTest(unittest.TestCase):
+    def _url_for(self, **kwargs) -> dict:
+        captured = {}
+
+        def fake_get(url, **ignored):
+            captured["url"] = url
+            return b"<rss><channel></channel></rss>"
+
+        original = nekopull.http_get
+        nekopull.http_get = fake_get
+        try:
+            nekopull.fetch_releases("key", "s1", **kwargs)
+        finally:
+            nekopull.http_get = original
+        return {
+            key: value[0]
+            for key, value in urllib.parse.parse_qs(
+                urllib.parse.urlparse(captured["url"]).query
+            ).items()
+        }
+
+    def test_filters_are_sent_to_the_api(self):
+        query = self._url_for(levels=[2, 3], codecs=["h265", "av1"])
+        self.assertEqual(query["levels"], "2,3")
+        self.assertEqual(query["video_codec"], "2,3")
+        self.assertEqual(query["media_id"], "s1")
+
+    def test_unmappable_codec_keeps_the_filter_local(self):
+        query = self._url_for(codecs=["h265", "mpeg4"])
+        self.assertNotIn("video_codec", query)
+
+    def test_no_filters_means_no_extra_params(self):
+        query = self._url_for()
+        self.assertNotIn("levels", query)
+        self.assertNotIn("video_codec", query)
 
 
 class TransmissionTest(unittest.TestCase):

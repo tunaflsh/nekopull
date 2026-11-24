@@ -109,6 +109,10 @@ your `groups`, then the highest accepted sub level; then the newest release in t
 Leave `levels` unset to accept any. Only listed levels are eligible, and an
 untagged release is skipped when the list is set.
 
+`levels` and `codec` are also sent to nekoBT, so the newest-100 window contains
+matching releases instead of whatever was uploaded last. `mpeg4` has no API id,
+so a `codec` list containing it stays a local filter.
+
 ### `[client]`
 
 | key | meaning |
