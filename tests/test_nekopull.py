@@ -41,8 +41,15 @@ HASH = "0123456789abcdef0123456789abcdef01234567"
 MAGNET = f"magnet:?xt=urn:btih:{HASH}&dn=x"
 
 EPISODES = {
-    "546146": {"id": 546146, "season": 3, "episode": 7, "absolute": 55},
-    "546147": {"id": 546147, "season": 3, "episode": 6, "absolute": 54},
+    "546146": {
+        "id": 546146, "season": 3, "episode": 7, "absolute": 55,
+        "airDateUtc": "2026-11-13T14:00:00Z",
+    },
+    "546147": {
+        "id": 546147, "season": 3, "episode": 6, "absolute": 54,
+        "airDateUtc": "2026-11-06T14:00:00Z",
+    },
+    "546148": {"id": 546148, "season": 3, "episode": 8, "absolute": 56, "airDateUtc": None},
 }
 
 ITEM = {
@@ -162,6 +169,24 @@ class ReleaseParsingTest(unittest.TestCase):
         release = release_from_item(orphan, EPISODES)
         self.assertEqual((release.season, release.episode), (2, 3))
 
+    def test_announced_episode_is_not_taken(self):
+        announced = dict(ITEM, media_episode_ids=["546148"])
+        self.assertFalse(release_from_item(announced, EPISODES).aired)
+
+    def test_unmapped_episode_past_the_last_aired_is_rejected(self):
+        # e.g. "S05E14" when the season only has 12 episodes
+        beyond = dict(ITEM, media_episode_ids=[], title="[X] Show S03E14 1080p")
+        self.assertFalse(release_from_item(beyond, EPISODES).aired)
+
+    def test_unmapped_episode_within_aired_range_is_accepted(self):
+        # the site has not mapped it yet, but it cannot be newer than what aired
+        lagging = dict(ITEM, media_episode_ids=[], title="[X] Show S03E05 1080p")
+        self.assertTrue(release_from_item(lagging, EPISODES).aired)
+
+    def test_unmapped_absolute_number_must_be_known(self):
+        unknown = dict(ITEM, media_episode_ids=[], title="[X] Show - 99 [1080p]")
+        self.assertFalse(release_from_item(unknown, EPISODES).aired)
+
     def test_anonymous_release_has_no_group(self):
         self.assertIsNone(release_from_item(dict(ITEM, groups=[]), EPISODES).group)
 
@@ -180,6 +205,9 @@ class FilterTest(unittest.TestCase):
 
     def test_untagged_release_rejected_when_levels_set(self):
         self.assertFalse(passes_filters(make_release(level=None), self.settings))
+
+    def test_unaired_release_is_skipped(self):
+        self.assertFalse(passes_filters(make_release(aired=False), self.settings))
 
     def test_resolution(self):
         self.assertFalse(passes_filters(make_release(resolution="720p"), self.settings))

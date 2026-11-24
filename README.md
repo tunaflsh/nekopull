@@ -97,6 +97,10 @@ Any key here can also be set on a single `[[show]]` to override it.
 One release is taken per episode. When several match, the order of preference is
 your `groups`, then the highest accepted sub level; then the newest release in the feed.
 
+Only episodes that have aired are taken. A release whose episode nekoBT has not
+mapped is accepted only up to the latest aired episode, so a mislabelled release
+(`S05E14` for a 12-episode season) or a pre-air stays out.
+
 `begin` is not a default: it belongs to one show, since it says how far you are
 into that series. Set it on a `[[show]]` as `S03`, `S03E07`, `3x07` or an
 absolute number. It compares against the episode the site resolved, so it works

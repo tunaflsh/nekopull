@@ -77,6 +77,7 @@ class Release:
     episode: int = 0
     absolute: int | None = None
     batch: bool = False
+    aired: bool = True
 
     @property
     def episode_key(self) -> tuple[int, int]:
@@ -173,6 +174,21 @@ def parse_episode(title: str) -> tuple[int, int, bool]:
     return 0, 0, False
 
 
+def _parse_air(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _aired(entry: dict, now: datetime) -> bool:
+    air = _parse_air(entry.get("airDateUtc"))
+    return air is not None and air <= now
+
+
 def _normalise_fallback(
     season: int, episode: int, episodes: dict[str, dict]
 ) -> tuple[int, int]:
@@ -212,16 +228,26 @@ def release_from_item(
     if groups:
         group = str(groups[0].get("name") or groups[0].get("display_name") or "") or None
 
+    now = datetime.now(timezone.utc)
+    by_pair = {
+        (int(entry.get("season") or 0), int(entry.get("episode") or 0)): entry
+        for entry in episodes.values()
+    }
+    aired_pairs = [pair for pair, entry in by_pair.items() if _aired(entry, now)]
+    latest_aired = max(aired_pairs) if aired_pairs else None
+
     mapped = [
         episodes[str(episode_id)]
         for episode_id in item.get("media_episode_ids") or []
         if str(episode_id) in episodes
     ]
     absolute = None
+    aired = True
     if len(mapped) == 1:
         season = int(mapped[0].get("season") or 0)
         episode = int(mapped[0].get("episode") or 0)
         absolute = int(mapped[0].get("absolute") or 0) or None
+        aired = _aired(mapped[0], now)
     elif mapped:
         # Several episodes means a pack; track it per season rather than per episode.
         season = min(int(entry.get("season") or 0) for entry in mapped)
@@ -230,7 +256,16 @@ def release_from_item(
         season, episode, _ = parse_episode(clean)
         if season == 0 and episode > 0:
             absolute = episode
+        was_absolute = season == 0 and episode > 0
         season, episode = _normalise_fallback(season, episode, episodes)
+        entry = by_pair.get((season, episode))
+        if entry is not None:
+            aired = _aired(entry, now)
+        elif was_absolute:
+            aired = False  # an absolute number the media does not know
+        else:
+            # unmapped title episode: accept it only if the site has aired that far
+            aired = latest_aired is None or (season, episode) <= latest_aired
 
     magnet = str(
         (item.get("private_magnet") if private_magnet else item.get("magnet"))
@@ -253,6 +288,7 @@ def release_from_item(
         episode=episode,
         absolute=absolute,
         batch=bool(item.get("batch")),
+        aired=aired,
     )
 
 
@@ -949,6 +985,8 @@ def make_client(config: ClientConfig) -> TorrentClient:
 def passes_filters(
     release: Release, settings: Defaults, begin: tuple[int, int] | int | None = None
 ) -> bool:
+    if not release.aired:
+        return False
     if not settings.allow_batch and release.batch:
         return False
     if settings.resolutions and release.resolution not in settings.resolutions:
