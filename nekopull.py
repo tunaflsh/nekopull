@@ -421,7 +421,6 @@ class Defaults:
     resolutions: list[str] = field(default_factory=lambda: ["1080p"])
     allow_batch: bool = False
     private_magnet: bool = True
-    begin: tuple[int, int] | None = None
     groups: list[str] = field(default_factory=list)
 
     def merged(self, overrides: dict) -> Defaults:
@@ -432,7 +431,6 @@ class Defaults:
             "resolutions": list(self.resolutions),
             "allow_batch": self.allow_batch,
             "private_magnet": self.private_magnet,
-            "begin": self.begin,
             "groups": list(self.groups),
         }
         for key, value in overrides.items():
@@ -462,7 +460,6 @@ class Show:
             "resolutions": None if self.resolutions is None else list(self.resolutions),
             "allow_batch": self.allow_batch,
             "private_magnet": self.private_magnet,
-            "begin": self.begin,
             "groups": None if self.groups is None else list(self.groups),
         }
 
@@ -509,7 +506,6 @@ _SHOW_KEYS = {
     "private_magnet",
 }
 _DEFAULT_KEYS = {
-    "begin",
     "levels",
     "codec",
     "type",
@@ -612,8 +608,6 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
             raise ConfigError(f"{path}: unknown defaults key `{key}`")
         if key == "codec":
             defaults.codecs = _codec_list(path, "[defaults]", value) or []
-        elif key == "begin":
-            defaults.begin = _begin_value(path, "[defaults]", value)
         elif key == "type":
             defaults.video_types = _video_type_list(path, "[defaults]", value) or []
         elif key == "batch":
@@ -974,16 +968,18 @@ def make_client(config: ClientConfig) -> TorrentClient:
 # --- selection -------------------------------------------------------------
 
 
-def passes_filters(release: Release, settings: Defaults) -> bool:
+def passes_filters(
+    release: Release, settings: Defaults, begin: tuple[int, int] | int | None = None
+) -> bool:
     if not settings.allow_batch and release.batch:
         return False
     if settings.resolutions and release.resolution not in settings.resolutions:
         return False
-    if settings.begin is not None:
-        if isinstance(settings.begin, tuple):
-            if release.episode_key < settings.begin:
+    if begin is not None:
+        if isinstance(begin, tuple):
+            if release.episode_key < begin:
                 return False
-        elif release.absolute is not None and release.absolute < settings.begin:
+        elif release.absolute is not None and release.absolute < begin:
             return False
     if settings.levels and release.level not in settings.levels:
         return False
@@ -1008,6 +1004,7 @@ def select(
     *,
     media_id: str = "",
     state: State | None = None,
+    begin: tuple[int, int] | int | None = None,
 ) -> list[Release]:
     """Pick at most one release per episode, best-first, skipping known ones."""
     candidates: dict[tuple[int, int], list[Release]] = {}
@@ -1016,7 +1013,7 @@ def select(
             continue
         if release.episode <= 0 and not (release.batch and settings.allow_batch):
             continue
-        if not passes_filters(release, settings):
+        if not passes_filters(release, settings, begin):
             continue
         candidates.setdefault(release.episode_key, []).append(release)
 
@@ -1056,7 +1053,9 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                 LOG.error("%s: %s", show.name, exc)
                 failures += 1
                 continue
-            picks = select(releases, settings, media_id=show.media_id, state=state)
+            picks = select(
+                releases, settings, media_id=show.media_id, state=state, begin=show.begin
+            )
             LOG.info("%s: %d releases, %d new episode(s)", show.name, len(releases), len(picks))
             for release in picks:
                 description = (
@@ -1124,6 +1123,8 @@ def command_list(config: Config) -> int:
             for key, value in show.overrides().items()
             if value is not None
         }
+        if show.begin is not None:
+            overrides["begin"] = show.begin
         extra = " ".join(f"{key}={_format_value(value)}" for key, value in overrides.items())
         print(f"{show.media_id:>10}  {show.name}" + (f"  ({extra})" if extra else ""))
     return 0

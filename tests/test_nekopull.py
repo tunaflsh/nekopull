@@ -354,41 +354,50 @@ class ConfigTest(unittest.TestCase):
                 load_config(path, migrate=False)
 
     def test_begin_skips_older_episodes(self):
-        settings = Defaults(begin=(3, 7))
-        self.assertFalse(passes_filters(make_release(season=3, episode=6), settings))
-        self.assertTrue(passes_filters(make_release(season=3, episode=7), settings))
-        self.assertTrue(passes_filters(make_release(season=4, episode=1), settings))
+        settings = Defaults()
+        begin = (3, 7)
+        self.assertFalse(passes_filters(make_release(season=3, episode=6), settings, begin))
+        self.assertTrue(passes_filters(make_release(season=3, episode=7), settings, begin))
+        self.assertTrue(passes_filters(make_release(season=4, episode=1), settings, begin))
 
-    def test_begin_parsing(self):
+    def test_begin_is_per_show(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
                 tmp,
-                'apikey = "k"\n\n[defaults]\nbegin = "S03"\n\n'
-                '[[show]]\nmedia_id = "s1"\nbegin = "S03E07"\n',
+                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nbegin = "S03"\n\n'
+                '[[show]]\nmedia_id = "s2"\nbegin = "S03E07"\n',
             )
             config = load_config(path, migrate=False)
-            self.assertEqual(config.defaults.begin, (3, 0))
-            merged = config.defaults.merged(config.shows[0].overrides())
-            self.assertEqual(merged.begin, (3, 7))
+            self.assertEqual(config.shows[0].begin, (3, 0))
+            self.assertEqual(config.shows[1].begin, (3, 7))
+            self.assertEqual(config.defaults.merged(config.shows[0].overrides()).levels, [])
+
+    def test_begin_in_defaults_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[defaults]\nbegin = "S03"\n\n[[show]]\nmedia_id = "s1"\n',
+            )
+            with self.assertRaises(ConfigError):
+                load_config(path, migrate=False)
 
     def test_begin_accepts_absolute_numbers(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
                 tmp,
-                'apikey = "k"\n\n[defaults]\nbegin = 55\n\n'
-                '[[show]]\nmedia_id = "s1"\nbegin = "3x07"\n',
+                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nbegin = 55\n\n'
+                '[[show]]\nmedia_id = "s2"\nbegin = "3x07"\n',
             )
             config = load_config(path, migrate=False)
-            self.assertEqual(config.defaults.begin, 55)
-            merged = config.defaults.merged(config.shows[0].overrides())
-            self.assertEqual(merged.begin, (3, 7))
+            self.assertEqual(config.shows[0].begin, 55)
+            self.assertEqual(config.shows[1].begin, (3, 7))
 
     def test_absolute_begin_filters_by_absolute_number(self):
-        settings = Defaults(begin=55)
-        self.assertFalse(passes_filters(make_release(absolute=54), settings))
-        self.assertTrue(passes_filters(make_release(absolute=55), settings))
+        settings = Defaults()
+        self.assertFalse(passes_filters(make_release(absolute=54), settings, 55))
+        self.assertTrue(passes_filters(make_release(absolute=55), settings, 55))
         # an unmapped release has no absolute number, so it is not filtered out
-        self.assertTrue(passes_filters(make_release(absolute=None), settings))
+        self.assertTrue(passes_filters(make_release(absolute=None), settings, 55))
 
     def test_invalid_begin_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -414,7 +423,8 @@ class ConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
                 tmp,
-                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ntype = ["web_dl"]\nbatch = true\n',
+                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ntype = ["web_dl"]\n'
+                'batch = true\nbegin = "S01E05"\n',
             )
             buffer = io.StringIO()
             with contextlib.redirect_stdout(buffer):
@@ -422,6 +432,7 @@ class ConfigTest(unittest.TestCase):
             output = buffer.getvalue()
             self.assertIn("type=['web_dl']", output)
             self.assertIn("batch=True", output)
+            self.assertIn("begin=S01E05", output)
 
     def test_unknown_video_type_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

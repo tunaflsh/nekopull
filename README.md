@@ -94,15 +94,17 @@ Any key here can also be set on a single `[[show]]` to override it.
 | `resolutions` | `["1080p"]` | accepted resolutions, read from the title; a release without one is skipped |
 | `groups` | `[]` | release groups to prefer (a preference, not a filter) |
 | `batch` | `false` | accept season batches, tracked per season |
-| `begin` | unset | skip episodes before this one: `S03`, `S03E07`, `3x07` or an absolute number |
 | `private_magnet` | `true` | hand over your private magnet (carries your passkey) |
 
 One release is taken per episode. When several match, the order of preference is
 your `groups`, then the highest accepted sub level; then the newest release in the feed.
 
-`begin` compares against the episode the site resolved, so it works for shows
-numbered absolutely. An absolute `begin` can only filter releases whose episode
-nekoBT knows — a torrent with no Media Episodes set is never skipped.
+`begin` is not a default: it belongs to one show, since it says how far you are
+into that series. Set it on a `[[show]]` as `S03`, `S03E07`, `3x07` or an
+absolute number. It compares against the episode the site resolved, so it works
+for shows numbered absolutely; an absolute `begin` can only filter releases
+whose episode nekoBT knows — a torrent with no Media Episodes set is never
+skipped.
 
 **Sub levels** describe how much work went into the subtitles:
 
