@@ -4,6 +4,9 @@ A small poller for nekoBT. It checks the shows you list for
 new episodes and hands the magnet link to your torrent client — Transmission
 today, others by adding a backend.
 
+Season and episode come from nekoBT's own mapping of a release to episodes, so
+`- 55`, `EP382` and `S01E07` all resolve to the same episode.
+
 ## Dependencies
 
 Python 3.11+
@@ -91,9 +94,9 @@ Any key here can also be set on a single `[[show]]` to override it.
 | `levels` | any | sub levels to accept, e.g. `[2, 3]` |
 | `codec` | any | accepted codecs: `h264`, `h265`, `av1`, `vp9`, `mpeg2`, `xvid`, `wmv`, `vc1`; a string or a list |
 | `video_type` | any | release type, e.g. `web_dl`, `bd_remux`, `dvd_raw`; a string or a list |
-| `resolutions` | `["1080p"]` | accepted resolutions; a release without one is skipped |
+| `resolutions` | `["1080p"]` | accepted resolutions, read from the title; a release without one is skipped |
 | `groups` | `[]` | release groups to prefer (a preference, not a filter) |
-| `allow_batch` | `false` | accept season batches |
+| `allow_batch` | `false` | accept season batches, tracked per season |
 
 One release is taken per episode. When several match, the order of preference is
 your `groups`, then the highest accepted sub level; then the newest release in the feed.

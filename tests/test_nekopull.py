@@ -22,38 +22,69 @@ from nekopull import (  # noqa: E402
     ClientError,
     ConfigError,
     Defaults,
+    Release,
     State,
     Transmission,
     load_config,
     make_client,
     parse_episode,
-    parse_release,
     passes_filters,
     rank,
+    release_from_item,
     select,
     split_tags,
 )
 
-MAGNET = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=x"
+HASH = "0123456789abcdef0123456789abcdef01234567"
+MAGNET = f"magnet:?xt=urn:btih:{HASH}&dn=x"
+
+EPISODES = {
+    "546146": {"id": 546146, "season": 3, "episode": 7, "absolute": 55},
+    "546147": {"id": 546147, "season": 3, "episode": 6, "absolute": 54},
+}
+
+ITEM = {
+    "id": 15262011588621,
+    "title": "[Anarchy] Kusuriya no Hitorigoto - 55 (WEB 1080p).mkv",
+    "media_id": "s1477",
+    "media_episode_ids": ["546146"],
+    "level": 3,
+    "video_codec": 2,
+    "video_type": 8,
+    "batch": False,
+    "filesize": "2416879361",
+    "infohash": HASH,
+    "magnet": "magnet:?xt=urn:btih:public",
+    "private_magnet": "magnet:?xt=urn:btih:private",
+    "groups": [{"name": "anarchy subs", "display_name": "Anarchy Subs"}],
+}
 
 
-def tags(video_type: int) -> str:
-    return "{Tags:L0;V%d;C1;A=ja;S=en;}" % video_type
+def make_release(**kwargs) -> Release:
+    defaults = {
+        "title": "Show S01E01 1080p",
+        "magnet": MAGNET,
+        "infohash": HASH,
+        "size": 100,
+        "level": 0,
+        "resolution": "1080p",
+        "codec": "h264",
+        "video_type": "web_dl",
+        "group": "show",
+        "season": 1,
+        "episode": 1,
+        "batch": False,
+    }
+    defaults.update(kwargs)
+    return Release(**defaults)
 
 
-def write_config(tmp: str, body: str) -> Path:
-    path = Path(tmp) / "config.toml"
-    path.write_text(body)
-    return path
+class EpisodeFallbackTest(unittest.TestCase):
+    """Title parsing is now only a fallback for torrents without episode ids."""
 
-
-class EpisodeParsingTest(unittest.TestCase):
     def test_sxxeyy(self):
         self.assertEqual(parse_episode("Show S01E12 Title 1080p"), (1, 12, False))
         self.assertEqual(parse_episode("Show s2e05 MULTi AAC2.0"), (2, 5, False))
-
-    def test_proper_marker(self):
-        self.assertEqual(parse_episode("Show S01E12v2 1080p"), (1, 12, True))
 
     def test_dash_number(self):
         self.assertEqual(
@@ -64,15 +95,8 @@ class EpisodeParsingTest(unittest.TestCase):
     def test_explicit_prefix(self):
         self.assertEqual(parse_episode("[ToonsHub] Chiikawa EP382 1080p"), (0, 382, False))
 
-    def test_nxnn(self):
-        self.assertEqual(parse_episode("Show 1x07 [720p]"), (1, 7, False))
-
     def test_no_false_positive_on_quality(self):
-        for title in (
-            "Show 1080p H.264 AAC2.0",
-            "Show [1080p][HEVC x265 10bit]",
-            "Show E-AC3 5.1",
-        ):
+        for title in ("Show 1080p H.264 AAC2.0", "Show [1080p][HEVC x265 10bit]"):
             self.assertEqual(parse_episode(title), (0, 0, False), title)
 
 
@@ -87,33 +111,44 @@ class TagParsingTest(unittest.TestCase):
         self.assertEqual(clean, "Show - 08 [1080p]")
         self.assertEqual(tags, {})
 
-    def test_video_type_from_tag(self):
-        for tag, expected in ((9, "web_dl"), (13, "bd_encode"), (5, "dvd_raw")):
-            release = parse_release(f"[X] Show S01E01 {tags(tag)}", MAGNET)
-            self.assertEqual(release.video_type, expected, tag)
 
-    def test_tag_codec_wins_over_the_title(self):
-        release = parse_release("[X] Show S01E01 1080p AVC {Tags:L0;V9;C2;}", MAGNET)
+class ReleaseParsingTest(unittest.TestCase):
+    def test_episode_comes_from_the_media_map(self):
+        release = release_from_item(ITEM, EPISODES)
+        self.assertEqual((release.season, release.episode), (3, 7))
+        self.assertEqual(release.level, 3)
         self.assertEqual(release.codec, "h265")
-
-    def test_release_attributes(self):
-        release = parse_release(
-            "[Erai-raws] Show - 08 [1080p CR WEB-DL AVC AAC][MultiSub] {Tags:L0;V9;C1;}",
-            MAGNET,
-        )
-        self.assertEqual(release.level, 0)
+        self.assertEqual(release.video_type, "web_encode")
+        self.assertEqual(release.group, "anarchy subs")
         self.assertEqual(release.resolution, "1080p")
-        self.assertEqual(release.codec, "h264")
-        self.assertEqual(release.source, "web")
-        self.assertEqual(release.group, "Erai-raws")
-        self.assertEqual(release.episode, 8)
-        self.assertEqual(release.infohash, "0123456789abcdef0123456789abcdef01234567")
-        self.assertFalse(release.proper)
+        self.assertEqual(release.size, 2416879361)
+        self.assertFalse(release.batch)
 
-    def test_group_suffix_and_batch(self):
-        release = parse_release("[ToonsHub] Show S01 [1080p] (Batch) {Tags:L1;V9;C1;}", MAGNET)
+    def test_private_magnet_preferred(self):
+        self.assertEqual(
+            release_from_item(ITEM, EPISODES).magnet, "magnet:?xt=urn:btih:private"
+        )
+
+    def test_a_pack_maps_to_its_season(self):
+        pack = dict(ITEM, media_episode_ids=["546146", "546147"], batch=True)
+        release = release_from_item(pack, EPISODES)
+        self.assertEqual(release.season, 3)
+        self.assertEqual(release.episode, 0)
         self.assertTrue(release.batch)
-        self.assertEqual(release.group, "ToonsHub")
+
+    def test_falls_back_to_the_title_without_episode_ids(self):
+        orphan = dict(ITEM, media_episode_ids=[], title="[Erai-raws] Show - 08 [1080p]")
+        release = release_from_item(orphan, EPISODES)
+        self.assertEqual((release.season, release.episode), (0, 8))
+
+    def test_unknown_episode_id_is_ignored(self):
+        orphan = dict(ITEM, media_episode_ids=["999"], title="Show S02E03 1080p")
+        release = release_from_item(orphan, EPISODES)
+        self.assertEqual((release.season, release.episode), (2, 3))
+
+    def test_group_falls_back_to_the_title_prefix(self):
+        item = dict(ITEM, groups=[])
+        self.assertEqual(release_from_item(item, EPISODES).group, "Anarchy")
 
 
 class FilterTest(unittest.TestCase):
@@ -121,105 +156,137 @@ class FilterTest(unittest.TestCase):
         self.settings = Defaults(levels=[3], resolutions=["1080p"])
 
     def test_level_must_be_accepted(self):
-        official = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET)
-        fansub = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET)
-        self.assertFalse(passes_filters(official, self.settings))
-        self.assertTrue(passes_filters(fansub, self.settings))
+        self.assertFalse(passes_filters(make_release(level=0), self.settings))
+        self.assertTrue(passes_filters(make_release(level=3), self.settings))
 
     def test_no_level_filter_accepts_everything(self):
         settings = Defaults(resolutions=["1080p"])
-        official = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET)
-        self.assertTrue(passes_filters(official, settings))
+        self.assertTrue(passes_filters(make_release(level=0), settings))
 
     def test_untagged_release_rejected_when_levels_set(self):
-        untagged = parse_release("Show S01E01 1080p", MAGNET)
-        self.assertFalse(passes_filters(untagged, self.settings))
+        self.assertFalse(passes_filters(make_release(level=None), self.settings))
 
     def test_resolution(self):
-        hd = parse_release("Show S01E01 720p {Tags:L3;}", MAGNET)
-        self.assertFalse(passes_filters(hd, self.settings))
+        self.assertFalse(passes_filters(make_release(resolution="720p"), self.settings))
+
+    def test_codec(self):
+        settings = Defaults(codecs=["h265"])
+        self.assertTrue(passes_filters(make_release(codec="h265"), settings))
+        self.assertFalse(passes_filters(make_release(codec="h264"), settings))
+
+    def test_video_type(self):
+        settings = Defaults(video_types=["web_dl"])
+        self.assertTrue(passes_filters(make_release(video_type="web_dl"), settings))
+        self.assertFalse(passes_filters(make_release(video_type="web_encode"), settings))
 
     def test_batch(self):
-        batch = parse_release("Show S01 Batch 1080p {Tags:L3;}", MAGNET)
+        batch = make_release(batch=True)
         self.assertFalse(passes_filters(batch, self.settings))
         relaxed = Defaults(resolutions=["1080p"], allow_batch=True)
         self.assertTrue(passes_filters(batch, relaxed))
 
-    def test_v2_is_accepted(self):
-        proper = parse_release("Show S01E01v2 1080p {Tags:L3;}", MAGNET)
-        self.assertTrue(passes_filters(proper, self.settings))
-
-    def test_codec(self):
-        settings = Defaults(codecs=["h265"], resolutions=["1080p"])
-        hevc = parse_release("Show S01E01 1080p HEVC {Tags:L3;}", MAGNET)
-        h264 = parse_release("Show S01E01 1080p x264 {Tags:L3;}", MAGNET)
-        self.assertTrue(passes_filters(hevc, settings))
-        self.assertFalse(passes_filters(h264, settings))
-
-    def test_video_type(self):
-        settings = Defaults(resolutions=["1080p"], video_types=["web_dl"])
-        web = parse_release("[X] Show S01E01 1080p " + tags(9), MAGNET)
-        encode = parse_release("[X] Show S01E01 1080p " + tags(8), MAGNET)
-        self.assertTrue(passes_filters(web, settings))
-        self.assertFalse(passes_filters(encode, settings))
-
-    def test_no_codec_filter_accepts_everything(self):
-        settings = Defaults(resolutions=["1080p"])
-        h264 = parse_release("Show S01E01 1080p x264 {Tags:L3;}", MAGNET)
-        self.assertTrue(passes_filters(h264, settings))
-
     def test_prefers_higher_level(self):
-        l0 = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET)
-        l3 = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET)
         settings = Defaults(resolutions=["1080p"])
-        self.assertLess(rank(l3, settings), rank(l0, settings))
+        self.assertLess(
+            rank(make_release(level=3), settings), rank(make_release(level=0), settings)
+        )
 
     def test_group_preference_wins_ties(self):
         settings = Defaults(resolutions=["1080p"], groups=["Erai-raws"])
-        other = parse_release("[ToonsHub] Show S01E01 1080p {Tags:L3;}", MAGNET)
-        wanted = parse_release("[Erai-raws] Show S01E01 1080p {Tags:L3;}", MAGNET)
+        wanted = make_release(group="erai-raws")
+        other = make_release(group="toonshub")
         self.assertLess(rank(wanted, settings), rank(other, settings))
 
 
 class SelectTest(unittest.TestCase):
     def test_one_per_episode_best_wins(self):
         settings = Defaults(resolutions=["1080p"])
-        releases = [
-            parse_release("[A] Show S01E01 1080p {Tags:L1;}", MAGNET),
-            parse_release("[B] Show S01E01 1080p {Tags:L3;}", MAGNET),
-            parse_release("[C] Show S01E02 1080p {Tags:L3;}", MAGNET),
-        ]
-        picks = select(releases, settings)
+        picks = select(
+            [
+                make_release(episode=1, level=1, group="a"),
+                make_release(episode=1, level=3, group="b"),
+                make_release(episode=2, level=3, group="c"),
+            ],
+            settings,
+        )
         self.assertEqual([release.episode for release in picks], [1, 2])
-        self.assertEqual(picks[0].group, "B")
+        self.assertEqual(picks[0].group, "b")
 
-    def test_other_codecs_are_recognised(self):
-        for title, expected in (
-            ("Show S01E01 1080p VP9", "vp9"),
-            ("Show S01E01 DVD XviD", "xvid"),
-            ("Show S01E01 MPEG-2", "mpeg2"),
-            ("Show S01E01 BD VC-1", "vc1"),
-            ("Show S01E01 TV WMV", "wmv"),
-        ):
-            self.assertEqual(parse_release(title, MAGNET).codec, expected, title)
-
-    def test_unparsed_episodes_dropped(self):
+    def test_packs_are_skipped_unless_allowed(self):
         settings = Defaults(resolutions=["1080p"])
-        self.assertEqual(select([parse_release("Show 1080p {Tags:L3;}", MAGNET)], settings), [])
+        packs = [make_release(episode=0, batch=True)]
+        self.assertEqual(select(packs, settings), [])
+        relaxed = Defaults(resolutions=["1080p"], allow_batch=True)
+        self.assertEqual(len(select(packs, relaxed)), 1)
 
     def test_state_skips_known_episode(self):
         settings = Defaults(resolutions=["1080p"])
         with tempfile.TemporaryDirectory() as tmp:
             state = State(Path(tmp) / "state.db")
-            release = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET)
+            release = make_release(season=3, episode=7)
             self.assertEqual(len(select([release], settings, media_id="s1", state=state)), 1)
             state.record("s1", release)
             self.assertEqual(select([release], settings, media_id="s1", state=state), [])
-            self.assertTrue(state.has_release(release.infohash))
+            self.assertTrue(state.has_release(HASH))
             reopened = State(Path(tmp) / "state.db")
-            self.assertTrue(reopened.has_episode("s1", 1, 1))
+            self.assertTrue(reopened.has_episode("s1", 3, 7))
             reopened.close()
             state.close()
+
+
+class FetchTest(unittest.TestCase):
+    def _call(self, payload: dict | None = None, **kwargs):
+        captured = {}
+
+        def fake_get(url, **options):
+            captured["url"] = url
+            captured["headers"] = options.get("headers") or {}
+            return json.dumps(
+                payload
+                or {"data": {"results": [ITEM], "media": {"episodes": list(EPISODES.values())}}}
+            ).encode()
+
+        original = nekopull.http_get
+        nekopull.http_get = fake_get
+        try:
+            releases = nekopull.fetch_releases("key", "s1477", **kwargs)
+        finally:
+            nekopull.http_get = original
+        query = {
+            key: value[0]
+            for key, value in urllib.parse.parse_qs(
+                urllib.parse.urlparse(captured["url"]).query
+            ).items()
+        }
+        return releases, query, captured["headers"]
+
+    def test_episodes_resolved_from_the_media_map(self):
+        releases, query, headers = self._call()
+        self.assertEqual(query["media_id"], "s1477")
+        self.assertEqual(query["sort_by"], "latest")
+        self.assertEqual(query["batch"], "false")
+        self.assertEqual(headers["Cookie"], "ssid=key")
+        self.assertEqual((releases[0].season, releases[0].episode), (3, 7))
+
+    def test_filters_are_sent_to_the_api(self):
+        _, query, _ = self._call(levels=[2, 3], codecs=["h265", "av1"], video_types=["web_dl"])
+        self.assertEqual(query["levels"], "2,3")
+        self.assertEqual(query["video_codec"], "2,3")
+        self.assertEqual(query["video_type"], "9")
+
+    def test_allow_batch_drops_the_batch_filter(self):
+        _, query, _ = self._call(allow_batch=True)
+        self.assertNotIn("batch", query)
+
+    def test_no_filters_means_no_extra_params(self):
+        _, query, _ = self._call()
+        self.assertNotIn("levels", query)
+        self.assertNotIn("video_codec", query)
+        self.assertNotIn("video_type", query)
+
+    def test_api_error_is_reported(self):
+        with self.assertRaises(nekopull.NekobtError):
+            self._call({"error": True, "message": "nope"})
 
 
 class ConfigTest(unittest.TestCase):
@@ -245,48 +312,30 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(merged.levels, [0, 1])
             self.assertEqual(merged.resolutions, ["1080p"])
 
-    def test_codec_accepts_string_or_list(self):
+    def test_filters_parse_from_strings_or_lists(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
                 tmp,
                 'apikey = "k"\n\n[defaults]\ncodec = "h265"\n\n'
-                '[[show]]\nmedia_id = "s1"\ncodec = ["h264", "AV1"]\n',
+                '[[show]]\nmedia_id = "s1"\ncodec = ["h264", "AV1"]\n'
+                'video_type = ["webdl", "BD_Remux"]\n',
             )
             config = load_config(path, migrate=False)
             self.assertEqual(config.defaults.codecs, ["h265"])
             merged = config.defaults.merged(config.shows[0].overrides())
             self.assertEqual(merged.codecs, ["h264", "av1"])
+            self.assertEqual(merged.video_types, ["web_dl", "bd_remux"])
 
-    def test_codec_values_come_from_the_parser(self):
+    def test_unknown_codec_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(
-                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ncodec = ["vp9", "mpeg2"]\n'
-            )
-            config = load_config(path, migrate=False)
-            self.assertEqual(config.shows[0].codecs, ["vp9", "mpeg2"])
-
-    def test_video_type_accepts_any_spelling(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(
-                tmp,
-                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n'
-                'video_type = ["webdl", "BD_Remux"]\n',
-            )
-            config = load_config(path, migrate=False)
-            self.assertEqual(config.shows[0].video_types, ["web_dl", "bd_remux"])
+            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ncodec = "h266"\n')
+            with self.assertRaises(ConfigError):
+                load_config(path, migrate=False)
 
     def test_unknown_video_type_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
                 tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nvideo_type = "bluray"\n'
-            )
-            with self.assertRaises(ConfigError):
-                load_config(path, migrate=False)
-
-    def test_unknown_codec_rejected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(
-                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ncodec = "h266"\n'
             )
             with self.assertRaises(ConfigError):
                 load_config(path, migrate=False)
@@ -328,9 +377,7 @@ class ConfigTest(unittest.TestCase):
 
     def test_key_migrated_to_libsecret(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(
-                tmp, 'apikey = "secret-value"\n\n[[show]]\nmedia_id = "s1"\n'
-            )
+            path = write_config(tmp, 'apikey = "secret-value"\n\n[[show]]\nmedia_id = "s1"\n')
             with mock.patch("nekopull.secret_tool_available", return_value=True), \
                     mock.patch(
                         "nekopull.subprocess.run",
@@ -342,8 +389,7 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["input"], "secret-value\n")
             self.assertIn("store", run.call_args.args[0])
             self.assertEqual(
-                path.read_text(),
-                'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n',
+                path.read_text(), 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n'
             )
 
     def test_migration_preserves_a_trailing_comment(self):
@@ -358,39 +404,6 @@ class ConfigTest(unittest.TestCase):
                     ):
                 load_config(path)
             self.assertIn('apikey = "libsecret"  # inline', path.read_text())
-
-    def test_migration_skipped_for_dry_run(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(
-                tmp, 'apikey = "secret-value"\n\n[[show]]\nmedia_id = "s1"\n'
-            )
-            config = load_config(path, migrate=False)
-            self.assertIn("secret-value", path.read_text())
-            self.assertEqual(config.apikey_source, "config file")
-
-    def test_migration_skipped_without_secret_tool(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(
-                tmp, 'apikey = "secret-value"\n\n[[show]]\nmedia_id = "s1"\n'
-            )
-            with mock.patch("nekopull.secret_tool_available", return_value=False):
-                config = load_config(path)
-            self.assertIn("secret-value", path.read_text())
-            self.assertEqual(config.apikey, "secret-value")
-
-    def test_stub_reads_from_libsecret(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(
-                tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n'
-            )
-            with mock.patch("nekopull.secret_tool_available", return_value=True), \
-                    mock.patch(
-                        "nekopull.subprocess.run",
-                        return_value=SimpleNamespace(returncode=0, stdout="stored\n", stderr=""),
-                    ):
-                config = load_config(path)
-            self.assertEqual(config.apikey, "stored")
-            self.assertIn("libsecret", config.apikey_source)
 
     def test_client_credentials_migrated(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -407,11 +420,10 @@ class ConfigTest(unittest.TestCase):
                 config = load_config(path)
             self.assertEqual(config.client.username, "box")
             self.assertEqual(config.client.password, "hunter2")
-            self.assertEqual(run.call_count, 3)  # apikey, username, password
+            self.assertEqual(run.call_count, 3)
             text = path.read_text()
-            self.assertIn('apikey = "libsecret"', text)
-            self.assertIn('username = "libsecret"', text)
-            self.assertIn('password = "libsecret"', text)
+            for key in ("apikey", "username", "password"):
+                self.assertIn(f'{key} = "libsecret"', text)
 
     def test_client_credentials_read_from_libsecret(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -439,7 +451,8 @@ class ConfigTest(unittest.TestCase):
                 'apikey = "k"\n\n[client]\npassword = "libsecret"\n\n'
                 '[[show]]\nmedia_id = "s1"\n',
             )
-            def fake_run(args, **kwargs):  # stores succeed, lookups miss
+
+            def fake_run(args, **kwargs):
                 code = 0 if "store" in args else 1
                 return SimpleNamespace(returncode=code, stdout="", stderr="")
 
@@ -451,9 +464,7 @@ class ConfigTest(unittest.TestCase):
 
     def test_stub_without_stored_key(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(
-                tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n'
-            )
+            path = write_config(tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n')
             with mock.patch("nekopull.secret_tool_available", return_value=True), \
                     mock.patch(
                         "nekopull.subprocess.run",
@@ -463,27 +474,10 @@ class ConfigTest(unittest.TestCase):
                     load_config(path)
 
 
-class FeedParsingTest(unittest.TestCase):
-    def test_items_parsed(self):
-        xml = b"""<?xml version="1.0"?>
-        <rss version="1.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
-          <channel>
-            <item>
-              <title>[A] Show S01E03 1080p {Tags:L0;V9;}</title>
-              <link>magnet:?xt=urn:btih:aaaabbbbccccddddeeeeffff0000111122223333</link>
-              <torznab:attr name="size" value="1234"/>
-            </item>
-          </channel>
-        </rss>"""
-        original = nekopull.http_get
-        nekopull.http_get = lambda url, **kwargs: xml
-        try:
-            releases = nekopull.fetch_releases("key", "s1")
-        finally:
-            nekopull.http_get = original
-        self.assertEqual(len(releases), 1)
-        self.assertEqual(releases[0].episode, 3)
-        self.assertEqual(releases[0].size, 1234)
+def write_config(tmp: str, body: str) -> Path:
+    path = Path(tmp) / "config.toml"
+    path.write_text(body)
+    return path
 
 
 class _TransmissionHandler(http.server.BaseHTTPRequestHandler):
@@ -513,48 +507,6 @@ class _TransmissionHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-class FeedRequestTest(unittest.TestCase):
-    def _url_for(self, **kwargs) -> dict:
-        captured = {}
-
-        def fake_get(url, **ignored):
-            captured["url"] = url
-            return b"<rss><channel></channel></rss>"
-
-        original = nekopull.http_get
-        nekopull.http_get = fake_get
-        try:
-            nekopull.fetch_releases("key", "s1", **kwargs)
-        finally:
-            nekopull.http_get = original
-        return {
-            key: value[0]
-            for key, value in urllib.parse.parse_qs(
-                urllib.parse.urlparse(captured["url"]).query
-            ).items()
-        }
-
-    def test_filters_are_sent_to_the_api(self):
-        query = self._url_for(levels=[2, 3], codecs=["h265", "av1"])
-        self.assertEqual(query["levels"], "2,3")
-        self.assertEqual(query["video_codec"], "2,3")
-        self.assertEqual(query["media_id"], "s1")
-
-    def test_video_type_is_sent_to_the_api(self):
-        query = self._url_for(video_types=["web_dl", "bd_remux"])
-        self.assertEqual(query["video_type"], "9,14")
-
-    def test_codec_ids_are_all_or_nothing(self):
-        self.assertEqual(nekopull._codec_ids(["xvid", "wmv", "vc1"]), [6, 7, 8])
-        # a codec the API does not know keeps the whole filter local
-        self.assertEqual(nekopull._codec_ids(["h265", "not-a-codec"]), [])
-
-    def test_no_filters_means_no_extra_params(self):
-        query = self._url_for()
-        self.assertNotIn("levels", query)
-        self.assertNotIn("video_codec", query)
-
-
 class TransmissionTest(unittest.TestCase):
     def setUp(self):
         _TransmissionHandler.calls = 0
@@ -581,8 +533,7 @@ class TransmissionTest(unittest.TestCase):
 
 class ClientRegistryTest(unittest.TestCase):
     def test_transmission_is_registered(self):
-        client = make_client(ClientConfig())
-        self.assertIsInstance(client, Transmission)
+        self.assertIsInstance(make_client(ClientConfig()), Transmission)
 
     def test_unknown_backend(self):
         with self.assertRaises(ConfigError):

@@ -33,8 +33,7 @@ __version__ = "0.1.0"
 
 LOG = logging.getLogger("nekopull")
 
-TORZNAB_URL = "https://nekobt.to/api/torznab/api"
-CAPS_URL = f"{TORZNAB_URL}?t=caps"
+JSON_SEARCH_URL = "https://nekobt.to/api/v1/torrents/search"
 MEDIA_SEARCH_URL = "https://nekobt.to/api/v1/media/search"
 USER_AGENT = f"nekopull/{__version__}"
 TORZNAB_NS = {"torznab": "http://torznab.com/schemas/2015/feed"}
@@ -60,56 +59,9 @@ _EP_NXNN = re.compile(r"(?i)\b(\d{1,2})x(\d{1,3})(?:v(\d+))?\b")
 _EP_PREFIXED = re.compile(r"(?i)\bEP?(\d{1,4})(?:v(\d+))?\b")
 _EP_DASH = re.compile(r"(?:^|\s)-\s(\d{1,4})(?:v(\d+))?(?=[\s\[(]|$)")
 _RESOLUTION = re.compile(r"(?i)\b(2160p|1440p|1080p|720p|576p|480p)\b")
-_CODEC_TOKENS = {
-    "hevc": "h265",
-    "h.265": "h265",
-    "h265": "h265",
-    "x265": "h265",
-    "av1": "av1",
-    "h.264": "h264",
-    "h264": "h264",
-    "x264": "h264",
-    "avc": "h264",
-    "vp9": "vp9",
-    "vc-1": "vc1",
-    "vc1": "vc1",
-    "mpeg-2": "mpeg2",
-    "mpeg2": "mpeg2",
-    "mpeg-4": "xvid",
-    "mpeg4": "xvid",
-    "divx": "xvid",
-    "xvid": "xvid",
-    "wmv": "wmv",
-}
-_CODEC = re.compile(
-    r"(?i)\b("
-    + "|".join(re.escape(token) for token in sorted(_CODEC_TOKENS, key=len, reverse=True))
-    + r")\b"
-)
-_SOURCE = re.compile(
-    r"(?i)\b(blu-?ray|bd(?:mv|rip)?|web-?dl|web-?rip|web|hdtv|tvrip|dvd(?:rip)?)\b"
-)
-_BATCH = re.compile(r"(?i)\b(batch|complete|全集)\b|\bS\d{1,2}\s*(?:\(|\[|$)")
 _GROUP_PREFIX = re.compile(r"^\s*\[([^\]]+)\]")
-_GROUP_SUFFIX = re.compile(r"[-@]([A-Za-z0-9_.]+)\s*$")
 _INFOHASH = re.compile(r"urn:btih:([0-9a-zA-Z]{32,40})")
 
-_SOURCE_MAP = {
-    "bluray": "bluray",
-    "blu-ray": "bluray",
-    "bd": "bluray",
-    "bdmv": "bluray",
-    "bdrip": "bluray",
-    "web-dl": "web",
-    "webdl": "web",
-    "web-rip": "web",
-    "webrip": "web",
-    "web": "web",
-    "hdtv": "tv",
-    "tvrip": "tv",
-    "dvd": "dvd",
-    "dvdrip": "dvd",
-}
 
 
 @dataclass(slots=True)
@@ -124,12 +76,10 @@ class Release:
     resolution: str | None = None
     codec: str | None = None
     video_type: str | None = None
-    source: str | None = None
     group: str | None = None
     season: int = 0
     episode: int = 0
     batch: bool = False
-    proper: bool = False
 
     @property
     def episode_key(self) -> tuple[int, int]:
@@ -226,46 +176,58 @@ def parse_episode(title: str) -> tuple[int, int, bool]:
     return 0, 0, False
 
 
-def parse_release(
-    title: str, magnet: str, *, size: int = 0
-) -> Release:
-    """Build a :class:`Release` from a feed item title and magnet link."""
-    clean, tags = split_tags(title)
-    season, episode, proper = parse_episode(clean)
-    level = tags.get("L") if isinstance(tags.get("L"), int) else None
-    tagged_codec = _CODEC_BY_INDEX.get(tags.get("C")) if isinstance(tags.get("C"), int) else None
-    tagged_type = _VIDEO_TYPE_BY_INDEX.get(tags.get("V")) if isinstance(tags.get("V"), int) else None
+def release_from_item(item: dict, episodes: dict[str, dict]) -> Release:
+    """Build a :class:`Release` from a ``/torrents/search`` result.
 
+    ``episodes`` is the ``media.episodes`` map from the same response, which is
+    what makes the season and episode exact instead of a guess from the title.
+    """
+    title = str(item.get("title") or "")
+    clean, _ = split_tags(title)
     resolution = _RESOLUTION.search(clean)
-    codec_match = _CODEC.search(clean)
-    source_match = _SOURCE.search(clean)
 
     group = None
-    prefix = _GROUP_PREFIX.match(clean)
-    if prefix:
-        group = prefix.group(1).strip()
-    else:
-        suffix = _GROUP_SUFFIX.search(clean)
-        if suffix:
-            group = suffix.group(1).strip()
+    groups = item.get("groups") or []
+    if groups:
+        group = str(groups[0].get("name") or groups[0].get("display_name") or "") or None
+    if group is None:
+        prefix = _GROUP_PREFIX.match(clean)
+        group = prefix.group(1).strip() if prefix else None
 
-    hash_match = _INFOHASH.search(magnet)
+    mapped = [
+        episodes[str(episode_id)]
+        for episode_id in item.get("media_episode_ids") or []
+        if str(episode_id) in episodes
+    ]
+    if len(mapped) == 1:
+        season = int(mapped[0].get("season") or 0)
+        episode = int(mapped[0].get("episode") or 0)
+    elif mapped:
+        # Several episodes means a pack; track it per season rather than per episode.
+        season = min(int(entry.get("season") or 0) for entry in mapped)
+        episode = 0
+    else:
+        season, episode, _ = parse_episode(clean)
+
+    magnet = str(item.get("private_magnet") or item.get("magnet") or "")
+    infohash = str(item.get("infohash") or "").lower()
+    if not infohash:
+        match = _INFOHASH.search(magnet)
+        infohash = match.group(1).lower() if match else ""
+
     return Release(
         title=title,
         magnet=magnet,
-        infohash=hash_match.group(1).lower() if hash_match else "",
-        size=size,
-        level=level,
+        infohash=infohash,
+        size=_as_int(item.get("filesize")),
+        level=item.get("level") if isinstance(item.get("level"), int) else None,
         resolution=resolution.group(1).lower() if resolution else None,
-        codec=tagged_codec
-        or (_CODEC_TOKENS.get(codec_match.group(1).lower()) if codec_match else None),
-        video_type=tagged_type,
-        source=_SOURCE_MAP.get(source_match.group(1).lower()) if source_match else None,
+        codec=_CODEC_BY_INDEX.get(item.get("video_codec")),
+        video_type=_VIDEO_TYPE_BY_INDEX.get(item.get("video_type")),
         group=group,
         season=season,
         episode=episode,
-        batch=bool(_BATCH.search(clean)),
-        proper=proper,
+        batch=bool(item.get("batch")),
     )
 
 
@@ -276,11 +238,15 @@ class NekobtError(RuntimeError):
     """Raised when nekoBT cannot be queried."""
 
 
-def http_get(url: str, *, timeout: float = 30.0, attempts: int = 3) -> bytes:
+def http_get(
+    url: str, *, timeout: float = 30.0, attempts: int = 3, headers: dict | None = None
+) -> bytes:
     """GET a URL, honouring 429 Retry-After, with bounded retries."""
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
-        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        request = urllib.request.Request(
+            url, headers={"User-Agent": USER_AGENT, **(headers or {})}
+        )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read()
@@ -320,20 +286,16 @@ def fetch_releases(
     levels: list[int] | None = None,
     codecs: list[str] | None = None,
     video_types: list[str] | None = None,
+    allow_batch: bool = False,
 ) -> list[Release]:
-    """Fetch every release nekoBT holds for ``media_id``.
+    """Fetch releases for ``media_id`` from nekoBT's search API.
 
-    ``levels`` and ``codecs`` are pushed to the API when they can be expressed
-    there, so the newest-100 window contains matching releases rather than
-    whatever happened to be uploaded.
+    The response carries each torrent's episode ids plus the media's episode
+    map, so season and episode come from the site rather than from the title.
     """
-    params = {
-        "t": "search",
-        "batch": "false",
-        "limit": str(limit),
-        "apikey": apikey,
-        "media_id": media_id,
-    }
+    params = {"media_id": media_id, "sort_by": "latest", "limit": str(limit)}
+    if not allow_batch:
+        params["batch"] = "false"
     if levels:
         params["levels"] = ",".join(str(level) for level in levels)
     codec_ids = _codec_ids(codecs or [])
@@ -342,28 +304,26 @@ def fetch_releases(
     type_ids = _video_type_ids(video_types or [])
     if type_ids:
         params["video_type"] = ",".join(str(index) for index in type_ids)
-    query = urllib.parse.urlencode(params)
-    payload = http_get(f"{TORZNAB_URL}?{query}")
-    try:
-        root = ET.fromstring(payload)
-    except ET.ParseError as exc:
-        raise NekobtError(f"unparseable feed for {media_id}: {exc}") from exc
 
-    releases: list[Release] = []
-    for item in root.findall(".//item"):
-        title = _text(item, "title")
-        magnet = _enclosure_url(item) or _text(item, "link")
-        if not title or not magnet.startswith("magnet:"):
-            continue
-        attrs = _torznab_attrs(item)
-        releases.append(
-            parse_release(
-                title,
-                magnet,
-                size=_as_int(attrs.get("size")),
-            )
-        )
-    return releases
+    url = f"{JSON_SEARCH_URL}?{urllib.parse.urlencode(params)}"
+    payload = http_get(url, headers={"Cookie": f"ssid={apikey}"})
+    try:
+        answer = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise NekobtError(f"unparseable search response for {media_id}: {exc}") from exc
+    if answer.get("error"):
+        raise NekobtError(str(answer.get("message") or "nekoBT search failed"))
+
+    block = answer.get("data") or {}
+    media = block.get("media") or {}
+    episodes = {
+        str(entry.get("id")): entry
+        for entry in media.get("episodes") or []
+        if entry.get("id") is not None
+    }
+    return [
+        release_from_item(item, episodes) for item in block.get("results") or []
+    ]
 
 
 def _video_type_ids(video_types: list[str]) -> list[int]:
@@ -510,7 +470,7 @@ _SHOW_KEYS = {
 }
 _DEFAULT_KEYS = {"levels", "codec", "video_type", "resolutions", "allow_batch", "groups"}
 _CLIENT_KEYS = {"type", "url", "username", "password", "download_dir"}
-_CODECS = set(_CODEC_TOKENS.values())
+_CODECS = set(_CODEC_IDS)
 
 
 def _as_list(value) -> list:
@@ -949,7 +909,9 @@ def select(
     """Pick at most one release per episode, best-first, skipping known ones."""
     candidates: dict[tuple[int, int], list[Release]] = {}
     for release in releases:
-        if release.episode <= 0 or not release.infohash:
+        if not release.infohash:
+            continue
+        if release.episode <= 0 and not (release.batch and settings.allow_batch):
             continue
         if not passes_filters(release, settings):
             continue
@@ -984,6 +946,7 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                     levels=settings.levels,
                     codecs=settings.codecs,
                     video_types=settings.video_types,
+                    allow_batch=settings.allow_batch,
                 )
             except NekobtError as exc:
                 LOG.error("%s: %s", show.name, exc)
@@ -1055,19 +1018,12 @@ def command_verify(config: Config) -> int:
     failures = 0
     print(f"api key: {config.apikey_source}")
     try:
-        http_get(CAPS_URL)
+        releases = fetch_releases(config.apikey, config.shows[0].media_id, limit=1)
     except NekobtError as exc:
         print(f"nekoBT: {exc}", file=sys.stderr)
         failures += 1
     else:
-        print("nekoBT: reachable")
-        try:
-            releases = fetch_releases(config.apikey, config.shows[0].media_id, limit=1)
-        except NekobtError as exc:
-            print(f"api key: rejected ({exc})", file=sys.stderr)
-            failures += 1
-        else:
-            print(f"api key: works ({len(releases)} release(s) for {config.shows[0].name})")
+        print(f"api key: works ({len(releases)} release(s) for {config.shows[0].name})")
     try:
         version = make_client(config.client).version()
     except ClientError as exc:
