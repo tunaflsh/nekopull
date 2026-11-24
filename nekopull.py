@@ -123,6 +123,7 @@ class Release:
     level: int | None = None
     resolution: str | None = None
     codec: str | None = None
+    video_type: str | None = None
     source: str | None = None
     group: str | None = None
     season: int = 0
@@ -151,6 +152,32 @@ _CODEC_IDS = {
     "vc1": 8,
 }
 _CODEC_BY_INDEX = {index: name for name, index in _CODEC_IDS.items()}
+
+# The site's release-type enum ("video_type" in the API), also from the frontend
+# bundle. 10 is not used.
+_VIDEO_TYPES = {
+    "other": 0,
+    "vhs": 1,
+    "laserdisc": 2,
+    "tv_encode": 3,
+    "tv_raw": 4,
+    "dvd_raw": 5,
+    "dvd_encode": 6,
+    "web_mini": 7,
+    "web_encode": 8,
+    "web_dl": 9,
+    "bd_disc": 11,
+    "bd_mini": 12,
+    "bd_encode": 13,
+    "bd_remux": 14,
+    "hybrid": 15,
+    "dvd_disc": 16,
+}
+_VIDEO_TYPE_BY_INDEX = {index: name for name, index in _VIDEO_TYPES.items()}
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[\s_-]+", "", name).lower()
 
 
 def split_tags(title: str) -> tuple[str, dict]:
@@ -207,6 +234,7 @@ def parse_release(
     season, episode, proper = parse_episode(clean)
     level = tags.get("L") if isinstance(tags.get("L"), int) else None
     tagged_codec = _CODEC_BY_INDEX.get(tags.get("C")) if isinstance(tags.get("C"), int) else None
+    tagged_type = _VIDEO_TYPE_BY_INDEX.get(tags.get("V")) if isinstance(tags.get("V"), int) else None
 
     resolution = _RESOLUTION.search(clean)
     codec_match = _CODEC.search(clean)
@@ -231,6 +259,7 @@ def parse_release(
         resolution=resolution.group(1).lower() if resolution else None,
         codec=tagged_codec
         or (_CODEC_TOKENS.get(codec_match.group(1).lower()) if codec_match else None),
+        video_type=tagged_type,
         source=_SOURCE_MAP.get(source_match.group(1).lower()) if source_match else None,
         group=group,
         season=season,
@@ -290,6 +319,7 @@ def fetch_releases(
     limit: int = 100,
     levels: list[int] | None = None,
     codecs: list[str] | None = None,
+    video_types: list[str] | None = None,
 ) -> list[Release]:
     """Fetch every release nekoBT holds for ``media_id``.
 
@@ -309,6 +339,9 @@ def fetch_releases(
     codec_ids = _codec_ids(codecs or [])
     if codec_ids:
         params["video_codec"] = ",".join(str(index) for index in codec_ids)
+    type_ids = _video_type_ids(video_types or [])
+    if type_ids:
+        params["video_type"] = ",".join(str(index) for index in type_ids)
     query = urllib.parse.urlencode(params)
     payload = http_get(f"{TORZNAB_URL}?{query}")
     try:
@@ -331,6 +364,11 @@ def fetch_releases(
             )
         )
     return releases
+
+
+def _video_type_ids(video_types: list[str]) -> list[int]:
+    mapped = [_VIDEO_TYPES[name] for name in video_types if name in _VIDEO_TYPES]
+    return mapped if len(mapped) == len(video_types) else []
 
 
 def _codec_ids(codecs: list[str]) -> list[int]:
@@ -390,6 +428,7 @@ class ConfigError(RuntimeError):
 class Defaults:
     levels: list[int] = field(default_factory=list)
     codecs: list[str] = field(default_factory=list)
+    video_types: list[str] = field(default_factory=list)
     resolutions: list[str] = field(default_factory=lambda: ["1080p"])
     allow_batch: bool = False
     groups: list[str] = field(default_factory=list)
@@ -398,6 +437,7 @@ class Defaults:
         data = {
             "levels": list(self.levels),
             "codecs": list(self.codecs),
+            "video_types": list(self.video_types),
             "resolutions": list(self.resolutions),
             "allow_batch": self.allow_batch,
             "groups": list(self.groups),
@@ -414,6 +454,7 @@ class Show:
     name: str
     levels: list[int] | None = None
     codecs: list[str] | None = None
+    video_types: list[str] | None = None
     resolutions: list[str] | None = None
     groups: list[str] | None = None
     allow_batch: bool | None = None
@@ -422,6 +463,7 @@ class Show:
         return {
             "levels": None if self.levels is None else list(self.levels),
             "codecs": None if self.codecs is None else list(self.codecs),
+            "video_types": None if self.video_types is None else list(self.video_types),
             "resolutions": None if self.resolutions is None else list(self.resolutions),
             "allow_batch": self.allow_batch,
             "groups": None if self.groups is None else list(self.groups),
@@ -456,14 +498,37 @@ class Config:
     state_path: Path = STATE_PATH
 
 
-_SHOW_KEYS = {"media_id", "name", "levels", "codec", "resolutions", "groups", "allow_batch"}
-_DEFAULT_KEYS = {"levels", "codec", "resolutions", "allow_batch", "groups"}
+_SHOW_KEYS = {
+    "media_id",
+    "name",
+    "levels",
+    "codec",
+    "video_type",
+    "resolutions",
+    "groups",
+    "allow_batch",
+}
+_DEFAULT_KEYS = {"levels", "codec", "video_type", "resolutions", "allow_batch", "groups"}
 _CLIENT_KEYS = {"type", "url", "username", "password", "download_dir"}
 _CODECS = set(_CODEC_TOKENS.values())
 
 
 def _as_list(value) -> list:
     return list(value) if isinstance(value, (list, tuple)) else [value]
+
+
+def _video_type_list(path: Path, where: str, value) -> list[str] | None:
+    if value is None:
+        return None
+    requested = [_slug(item) for item in _as_list(value)]
+    by_slug = {_slug(name): name for name in _VIDEO_TYPES}
+    unknown = [item for item in requested if item not in by_slug]
+    if unknown:
+        raise ConfigError(
+            f"{path}: {where} has unknown video type(s): {', '.join(unknown)}"
+            f" (known: {', '.join(sorted(_VIDEO_TYPES))})"
+        )
+    return [by_slug[item] for item in requested]
 
 
 def _codec_list(path: Path, where: str, value) -> list[str] | None:
@@ -507,6 +572,8 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
             raise ConfigError(f"{path}: unknown defaults key `{key}`")
         if key == "codec":
             defaults.codecs = _codec_list(path, "[defaults]", value) or []
+        elif key == "video_type":
+            defaults.video_types = _video_type_list(path, "[defaults]", value) or []
         else:
             setattr(defaults, key, value)
 
@@ -526,6 +593,7 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
                 name=str(entry.get("name", media_id)),
                 levels=entry.get("levels"),
                 codecs=_codec_list(path, f"show #{index}", entry.get("codec")),
+                video_types=_video_type_list(path, f"show #{index}", entry.get("video_type")),
                 resolutions=entry.get("resolutions"),
                 groups=entry.get("groups"),
                 allow_batch=entry.get("allow_batch"),
@@ -858,6 +926,8 @@ def passes_filters(release: Release, settings: Defaults) -> bool:
         return False
     if settings.codecs and release.codec not in settings.codecs:
         return False
+    if settings.video_types and release.video_type not in settings.video_types:
+        return False
     return True
 
 
@@ -913,6 +983,7 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                     show.media_id,
                     levels=settings.levels,
                     codecs=settings.codecs,
+                    video_types=settings.video_types,
                 )
             except NekobtError as exc:
                 LOG.error("%s: %s", show.name, exc)

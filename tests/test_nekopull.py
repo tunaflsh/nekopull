@@ -37,6 +37,10 @@ from nekopull import (  # noqa: E402
 MAGNET = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=x"
 
 
+def tags(video_type: int) -> str:
+    return "{Tags:L0;V%d;C1;A=ja;S=en;}" % video_type
+
+
 def write_config(tmp: str, body: str) -> Path:
     path = Path(tmp) / "config.toml"
     path.write_text(body)
@@ -82,6 +86,11 @@ class TagParsingTest(unittest.TestCase):
         clean, tags = split_tags("Show - 08 [1080p]")
         self.assertEqual(clean, "Show - 08 [1080p]")
         self.assertEqual(tags, {})
+
+    def test_video_type_from_tag(self):
+        for tag, expected in ((9, "web_dl"), (13, "bd_encode"), (5, "dvd_raw")):
+            release = parse_release(f"[X] Show S01E01 {tags(tag)}", MAGNET)
+            self.assertEqual(release.video_type, expected, tag)
 
     def test_tag_codec_wins_over_the_title(self):
         release = parse_release("[X] Show S01E01 1080p AVC {Tags:L0;V9;C2;}", MAGNET)
@@ -146,6 +155,13 @@ class FilterTest(unittest.TestCase):
         h264 = parse_release("Show S01E01 1080p x264 {Tags:L3;}", MAGNET)
         self.assertTrue(passes_filters(hevc, settings))
         self.assertFalse(passes_filters(h264, settings))
+
+    def test_video_type(self):
+        settings = Defaults(resolutions=["1080p"], video_types=["web_dl"])
+        web = parse_release("[X] Show S01E01 1080p " + tags(9), MAGNET)
+        encode = parse_release("[X] Show S01E01 1080p " + tags(8), MAGNET)
+        self.assertTrue(passes_filters(web, settings))
+        self.assertFalse(passes_filters(encode, settings))
 
     def test_no_codec_filter_accepts_everything(self):
         settings = Defaults(resolutions=["1080p"])
@@ -248,6 +264,24 @@ class ConfigTest(unittest.TestCase):
             )
             config = load_config(path, migrate=False)
             self.assertEqual(config.shows[0].codecs, ["vp9", "mpeg2"])
+
+    def test_video_type_accepts_any_spelling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n'
+                'video_type = ["webdl", "BD_Remux"]\n',
+            )
+            config = load_config(path, migrate=False)
+            self.assertEqual(config.shows[0].video_types, ["web_dl", "bd_remux"])
+
+    def test_unknown_video_type_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nvideo_type = "bluray"\n'
+            )
+            with self.assertRaises(ConfigError):
+                load_config(path, migrate=False)
 
     def test_unknown_codec_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -505,6 +539,10 @@ class FeedRequestTest(unittest.TestCase):
         self.assertEqual(query["levels"], "2,3")
         self.assertEqual(query["video_codec"], "2,3")
         self.assertEqual(query["media_id"], "s1")
+
+    def test_video_type_is_sent_to_the_api(self):
+        query = self._url_for(video_types=["web_dl", "bd_remux"])
+        self.assertEqual(query["video_type"], "9,14")
 
     def test_codec_ids_are_all_or_nothing(self):
         self.assertEqual(nekopull._codec_ids(["xvid", "wmv", "vc1"]), [6, 7, 8])
