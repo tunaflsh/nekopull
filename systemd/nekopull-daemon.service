@@ -1,0 +1,14 @@
+[Unit]
+Description=nekopull - poll nekoBT by media id
+Documentation=https://github.com/tunaflsh/nekopull
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nekopull daemon
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

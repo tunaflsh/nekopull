@@ -69,6 +69,19 @@ python3 -m venv .venv && .venv/bin/pip install .
    then `gpgconf --reload gpg-agent`. Without a GUI pinentry the lookup in the
    unit fails; with a 2h default cache the unlock is gone before 04:00.
 
+   Alternatively run it as a daemon instead of a timer:
+
+   ```sh
+   systemctl --user disable --now nekopull.timer
+   systemctl --user enable --now nekopull-daemon.service
+   ```
+
+   `nekopull daemon` resolves the credentials once at start-up and keeps them
+   in memory, polling every `--interval` (default `1d`). The keyring is asked
+   only when the login session starts — while you are there — and the later
+   polls never touch it, so no passphrase has to survive in an agent. Restart
+   the unit after editing the config.
+
    To use a different time, add a drop-in:
 
    ```sh

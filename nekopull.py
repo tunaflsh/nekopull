@@ -1148,11 +1148,43 @@ def select(
 
 
 def command_run(config: Config, options: argparse.Namespace) -> int:
-    selected = _select_shows(config, options.show)
+    return _run_once(config, dry_run=options.dry_run, only=options.show)
+
+
+def command_daemon(config: Config, options: argparse.Namespace) -> int:
+    """Poll on an interval, keeping the resolved secrets in memory."""
+    interval = _parse_interval(options.interval)
+    LOG.info(
+        "holding credentials in memory for the life of the process; polling every %s",
+        options.interval,
+    )
+    while True:
+        try:
+            _run_once(config, dry_run=options.dry_run)
+        except KeyboardInterrupt:
+            raise
+        except Exception:  # a bad run must not kill the daemon
+            LOG.exception("run failed, will retry next interval")
+        time.sleep(interval)
+
+
+_INTERVAL = re.compile(r"^\s*(\d+)\s*([smhd])\s*$")
+_INTERVAL_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def _parse_interval(value: str) -> int:
+    match = _INTERVAL.match(str(value))
+    if not match:
+        raise ConfigError(f"interval must look like 30m, 1h or 1d (got {value!r})")
+    return int(match.group(1)) * _INTERVAL_SECONDS[match.group(2)]
+
+
+def _run_once(config: Config, *, dry_run: bool = False, only: list[str] | None = None) -> int:
+    selected = _select_shows(config, only)
     failures = 0
     added = 0
     with State(config.state_path) as state:
-        client = None if options.dry_run else make_client(config.client)
+        client = None if dry_run else make_client(config.client)
         for show in selected:
             settings = config.defaults.merged(show.overrides())
             label = show.media_id
@@ -1182,7 +1214,7 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                     f"{', L' + str(release.level) if release.level is not None else ''}]"
                     f" {release.title[:70]}"
                 )
-                if options.dry_run:
+                if dry_run:
                     LOG.info("[dry-run] would add %s", description)
                     added += 1
                     continue
@@ -1356,6 +1388,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     annotate.add_argument("--dry-run", action="store_true", help="report without rewriting")
     annotate.set_defaults(func=command_annotate)
+
+    daemon = subparsers.add_parser(
+        "daemon", help="poll continuously, resolving credentials only once"
+    )
+    daemon.add_argument(
+        "--interval", default="1d", help="time between polls, e.g. 30m, 1h, 1d (default: 1d)"
+    )
+    daemon.add_argument("--dry-run", action="store_true", help="report without adding anything")
+    daemon.set_defaults(func=command_daemon)
 
     verify = subparsers.add_parser("verify", help="check the API key, nekoBT and the client")
     verify.set_defaults(func=lambda config, options: command_verify(config))

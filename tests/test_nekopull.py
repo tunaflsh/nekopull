@@ -924,6 +924,26 @@ class CliTest(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn('media_id = "s1"', path.read_text())
 
+    def test_interval_parsing(self):
+        self.assertEqual(nekopull._parse_interval("1d"), 86400)
+        self.assertEqual(nekopull._parse_interval("30m"), 1800)
+        self.assertEqual(nekopull._parse_interval("2h"), 7200)
+        with self.assertRaises(ConfigError):
+            nekopull._parse_interval("daily")
+
+    def test_daemon_runs_then_sleeps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = load_config(
+                write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n'),
+                migrate=False,
+            )
+            options = SimpleNamespace(interval="1h", dry_run=False)
+            with mock.patch("nekopull._run_once") as run, \
+                    mock.patch("nekopull.time.sleep", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    nekopull.command_daemon(config, options)
+            self.assertEqual(run.call_count, 1)
+
     def test_secret_tool_detection(self):
         with mock.patch("nekopull.shutil.which", return_value="/usr/bin/secret-tool"):
             self.assertTrue(nekopull.secret_tool_available())
