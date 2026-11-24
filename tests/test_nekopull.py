@@ -84,6 +84,7 @@ def make_release(**kwargs) -> Release:
         "season": 1,
         "episode": 1,
         "batch": False,
+        "uploaded_at": 1_000,
     }
     defaults.update(kwargs)
     return Release(**defaults)
@@ -856,6 +857,20 @@ class CommandsTest(unittest.TestCase):
                 self.assertEqual(nekopull.command_run(config, options), 0)
             with State(config.state_path) as state:
                 self.assertFalse(state.has_episode("s1", 1, 1))
+                self.assertIsNone(state.last_poll("s1"))
+
+    def test_a_successful_run_records_the_poll(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config(tmp)
+            options = SimpleNamespace(dry_run=False, show=None)
+            client = SimpleNamespace(add=lambda magnet, tags: "added")
+            with mock.patch(
+                "nekopull.fetch_feed", return_value=([make_release()], "s1")
+            ), mock.patch("nekopull.make_client", return_value=client):
+                self.assertEqual(nekopull.command_run(config, options), 0)
+            with State(config.state_path) as state:
+                self.assertTrue(state.has_episode("s1", 1, 1))
+                self.assertIsNotNone(state.last_poll("s1"))
 
     def test_verify_rejects_a_bad_key(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1000,41 +1015,44 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(releases), 3)
         self.assertEqual(title, "Title")
 
-    def test_fetch_stops_once_a_page_is_at_the_boundary(self):
+    def test_fetch_stops_at_an_upload_older_than_the_last_poll(self):
         seen_offsets = []
 
         def fake_page(apikey, media_id, **options):
             seen_offsets.append(options["offset"])
-            return "Title", [make_release(season=3, episode=1), make_release(season=3, episode=0)]
+            return "Title", [
+                make_release(season=1, episode=5, uploaded_at=2000),
+                make_release(season=1, episode=4, uploaded_at=1000),
+            ]
 
         with mock.patch("nekopull._fetch_page", side_effect=fake_page):
-            releases, _ = nekopull.fetch_feed("k", "s1", limit=2, boundary=(3, 1))
+            releases, _ = nekopull.fetch_feed("k", "s1", limit=2, since=1500)
         self.assertEqual(seen_offsets, [0])
         self.assertEqual(len(releases), 2)
 
-    def test_fetch_pages_through_batches_without_stopping(self):
+    def test_fetch_keeps_paging_while_uploads_are_newer_than_the_marker(self):
         seen_offsets = []
 
         def fake_page(apikey, media_id, **options):
             seen_offsets.append(options["offset"])
             if options["offset"] == 0:
-                batch = make_release(season=3, episode=0)
-                batch.batch = True
-                return "Title", [batch, make_release(season=3, episode=9)]
+                return "Title", [
+                    make_release(season=3, episode=9, uploaded_at=3000),
+                    make_release(season=3, episode=8, uploaded_at=2500),
+                ]
             return "Title", []
 
         with mock.patch("nekopull._fetch_page", side_effect=fake_page):
-            nekopull.fetch_feed("k", "s1", limit=2, boundary=(3, 1))
+            nekopull.fetch_feed("k", "s1", limit=2, since=2000)
         self.assertEqual(seen_offsets, [0, 2])
 
-    def test_seen_boundary_takes_the_larger_of_begin_and_history(self):
-        state = mock.Mock()
-        state.newest_episode.return_value = (2, 12)
-        self.assertEqual(nekopull._seen_boundary(Show("s1", begin=(3, 1)), state), (3, 1))
-        state.newest_episode.return_value = (3, 5)
-        self.assertEqual(nekopull._seen_boundary(Show("s1", begin=(3, 1)), state), (3, 5))
-        state.newest_episode.return_value = None
-        self.assertIsNone(nekopull._seen_boundary(Show("s1"), state))
+    def test_poll_marker_round_trips(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with nekopull.State(Path(tmp) / "state.db") as state:
+                self.assertIsNone(state.last_poll("s1"))
+                state.mark_polled("s1", 123456)
+                state.mark_polled("s1", 999999)
+                self.assertEqual(state.last_poll("s1"), 999999)
 
     def test_newest_episode_comes_from_state(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -35,7 +35,7 @@ LOG = logging.getLogger("nekopull")
 JSON_SEARCH_URL = "https://nekobt.to/api/v1/torrents/search"
 
 # A safety net, not a real limit: a long show with many groups can need a few
-# dozen pages. Stopping at a boundary means normal polls fetch one page.
+# dozen pages. With a poll marker a normal poll fetches one.
 _MAX_PAGES = 200
 MEDIA_SEARCH_URL = "https://nekobt.to/api/v1/media/search"
 USER_AGENT = f"nekopull/{__version__}"
@@ -82,6 +82,7 @@ class Release:
     absolute: int | None = None
     batch: bool = False
     aired: bool = True
+    uploaded_at: int = 0
 
     @property
     def episode_key(self) -> tuple[int, int]:
@@ -232,6 +233,8 @@ def release_from_item(
     if groups:
         group = str(groups[0].get("name") or groups[0].get("display_name") or "") or None
 
+    uploaded_at = int(item.get("uploaded_at") or 0)
+
     now = datetime.now(timezone.utc)
     by_pair = {
         (int(entry.get("season") or 0), int(entry.get("episode") or 0)): entry
@@ -293,6 +296,7 @@ def release_from_item(
         absolute=absolute,
         batch=bool(item.get("batch")),
         aired=aired,
+        uploaded_at=uploaded_at,
     )
 
 
@@ -353,7 +357,8 @@ def fetch_releases(
     video_types: list[str] | None = None,
     allow_batch: bool = False,
     private_magnet: bool = True,
-    boundary: tuple[int, int] | None = None,
+    since: int | None = None,
+    max_pages: int = _MAX_PAGES,
 ) -> list[Release]:
     """Fetch the releases nekoBT holds for ``media_id``."""
     return _fetch(
@@ -365,7 +370,8 @@ def fetch_releases(
         video_types=video_types,
         allow_batch=allow_batch,
         private_magnet=private_magnet,
-        boundary=boundary,
+        since=since,
+        max_pages=max_pages,
     )[0]
 
 
@@ -379,7 +385,8 @@ def fetch_feed(
     video_types: list[str] | None = None,
     allow_batch: bool = False,
     private_magnet: bool = True,
-    boundary: tuple[int, int] | None = None,
+    since: int | None = None,
+    max_pages: int = _MAX_PAGES,
 ) -> tuple[list[Release], str | None]:
     """Fetch releases plus the media's own title."""
     return _fetch(
@@ -391,7 +398,8 @@ def fetch_feed(
         video_types=video_types,
         allow_batch=allow_batch,
         private_magnet=private_magnet,
-        boundary=boundary,
+        since=since,
+        max_pages=max_pages,
     )
 
 
@@ -405,16 +413,17 @@ def _fetch(
     video_types: list[str] | None = None,
     allow_batch: bool = False,
     private_magnet: bool = True,
-    boundary: tuple[int, int] | None = None,
+    since: int | None = None,
     max_pages: int = _MAX_PAGES,
 ) -> tuple[list[Release], str | None]:
     """Fetch releases for ``media_id``, walking back page by page.
 
     The response carries each torrent's episode ids plus the media's episode
     map, so season and episode come from the site rather than from the title.
-    Paging stops at ``boundary`` (the newest episode already grabbed, or the
-    per-show ``begin``): everything older is either already in the client or
-    excluded, and a show with no such marker is read to the end.
+    ``since`` is when this media was last polled (ms); paging stops once a page
+    holds an upload older than that, so reuploads of old episodes are still
+    seen and nothing is skipped because of episode numbering. Without
+    ``since`` the whole back catalogue is read.
     """
     page_limit = max(1, min(int(limit), 100))
     releases: list[Release] = []
@@ -435,8 +444,8 @@ def _fetch(
         releases.extend(page)
         if len(page) < page_limit:
             break
-        keys = [release.episode_key for release in page if not release.batch]
-        if boundary is not None and keys and max(keys) <= boundary:
+        stamps = [release.uploaded_at for release in page if release.uploaded_at]
+        if since is not None and stamps and min(stamps) < since:
             break
         offset += page_limit
     else:
@@ -1016,6 +1025,10 @@ CREATE TABLE IF NOT EXISTS grabbed (
     grabbed_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS grabbed_episode ON grabbed (media_id, season, episode);
+CREATE TABLE IF NOT EXISTS polls (
+    media_id  TEXT PRIMARY KEY,
+    polled_at INTEGER NOT NULL
+);
 """
 
 
@@ -1052,6 +1065,19 @@ class State:
             (media_id,),
         ).fetchone()
         return (row[0], row[1]) if row else None
+
+    def last_poll(self, media_id: str) -> int | None:
+        row = self._connection.execute(
+            "SELECT polled_at FROM polls WHERE media_id = ?", (media_id,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def mark_polled(self, media_id: str, when: int) -> None:
+        self._connection.execute(
+            "INSERT OR REPLACE INTO polls (media_id, polled_at) VALUES (?, ?)",
+            (media_id, when),
+        )
+        self._connection.commit()
 
     def has_episode(self, media_id: str, season: int, episode: int) -> bool:
         row = self._connection.execute(
@@ -1315,13 +1341,8 @@ def command_daemon(config: Config, options: argparse.Namespace) -> int:
         time.sleep(max(0.0, min(1.0, next_poll - time.monotonic())))
 
 
-def _seen_boundary(show: Show, state: State) -> tuple[int, int] | None:
-    """How far back paging has to go: the newest grabbed episode, or ``begin``."""
-    boundary = show.begin if isinstance(show.begin, tuple) else None
-    newest = state.newest_episode(show.media_id)
-    if newest is not None:
-        boundary = newest if boundary is None else max(boundary, newest)
-    return boundary
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def _config_mtime(path: Path) -> float | None:
@@ -1355,6 +1376,8 @@ def _run_once(config: Config, *, dry_run: bool = False, only: list[str] | None =
         for show in selected:
             settings = config.defaults.merged(show.overrides())
             label = show.media_id
+            started = _now_ms()
+            handed_over = True
             try:
                 releases, feed_title = fetch_feed(
                     config.apikey,
@@ -1364,7 +1387,7 @@ def _run_once(config: Config, *, dry_run: bool = False, only: list[str] | None =
                     video_types=settings.video_types,
                     allow_batch=settings.allow_batch,
                     private_magnet=settings.private_magnet,
-                    boundary=_seen_boundary(show, state),
+                    since=state.last_poll(show.media_id),
                 )
             except NekobtError as exc:
                 LOG.error("%s: %s", label, exc)
@@ -1392,11 +1415,16 @@ def _run_once(config: Config, *, dry_run: bool = False, only: list[str] | None =
                 except ClientError as exc:
                     LOG.error("%s: %s", label, exc)
                     failures += 1
+                    handed_over = False
                     break
                 LOG.info("%s (%s)", description, result)
                 if result == "added":
                     added += 1
                 state.record(show.media_id, release)
+            if handed_over and not dry_run:
+                # Only a poll that handed everything over may move the marker;
+                # otherwise a failed add would fall behind it and never retry.
+                state.mark_polled(show.media_id, started)
     LOG.info("done: %d added, %d failure(s)", added, failures)
     return 1 if failures else 0
 
@@ -1521,6 +1549,7 @@ def command_verify(config: Config) -> int:
             config.apikey,
             config.shows[0].media_id,
             limit=1,
+            max_pages=1,
             private_magnet=config.defaults.private_magnet,
         )
     except NekobtError as exc:

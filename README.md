@@ -122,11 +122,13 @@ untagged release is skipped when the list is set.
 matching releases instead of whatever was uploaded last. A `codec` or `type`
 list containing a value the API does not know stays a local filter.
 
-Releases are read newest-first, 100 at a time. A show with no history is read
-back to its first release; once episodes have been grabbed, paging stops at the
-newest one already recorded, and `begin` is the floor where it applies. So a
-long-running show is not re-read every poll, and a newly added one is not
-limited to the last 100 uploads.
+Releases are read newest-first, 100 at a time. A poll walks back only until it
+reaches uploads from before the previous poll — normally just the first page —
+while a show that has never been polled is read back to its first release.
+Because the marker is upload time and not episode numbers, a reupload of an old
+episode is still seen, and nothing is skipped just because that season was
+already watched. The marker only moves for a poll that handed every episode to
+the client, so a failed add is retried rather than forgotten.
 
 ### `[client]`
 
