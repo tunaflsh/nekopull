@@ -1063,6 +1063,54 @@ class CliTest(unittest.TestCase):
                 state.record("s9", make_release(season=9, episode=9, infohash="c"))
                 self.assertEqual(state.newest_episode("s1"), (2, 9))
 
+    def test_resolve_false_does_not_touch_the_keyring(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "libsecret"  # key\n\n[[show]]\nmedia_id = "s1"  # One\n'
+            )
+            with mock.patch("nekopull.read_secret") as read:
+                config = load_config(path, migrate=False, resolve=False)
+            read.assert_not_called()
+            self.assertEqual(config.apikey, "")
+            self.assertIn("not read", config.apikey_source)
+            self.assertEqual(config.annotations, {"s1": "One"})
+
+    def test_list_never_asks_for_the_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"  # One\n')
+            buffer = io.StringIO()
+            with mock.patch("nekopull.read_secret", side_effect=AssertionError("keyring used")), \
+                    contextlib.redirect_stdout(buffer):
+                code = nekopull.main(["--config", str(path), "list"])
+            self.assertEqual(code, 0)
+            self.assertIn("One", buffer.getvalue())
+
+    def test_annotate_never_asks_for_the_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n')
+            with mock.patch("nekopull.read_secret", side_effect=AssertionError("keyring used")), \
+                    mock.patch("nekopull.media_title", return_value="One"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                code = nekopull.main(["--config", str(path), "annotate"])
+            self.assertEqual(code, 0)
+            self.assertIn('media_id = "s1"  # One', path.read_text())
+
+    def test_dry_run_never_asks_for_the_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n')
+            with mock.patch("nekopull.read_secret", side_effect=AssertionError("keyring used")), \
+                    mock.patch("nekopull._run_once", return_value=0):
+                self.assertEqual(nekopull.main(["--config", str(path), "run", "--dry-run"]), 0)
+
+    def test_run_still_resolves_the_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n')
+            with mock.patch("nekopull.read_secret", return_value="key") as read, \
+                    mock.patch("nekopull._run_once", return_value=0) as run:
+                self.assertEqual(nekopull.main(["--config", str(path), "run"]), 0)
+            read.assert_called_once_with("apikey")
+            self.assertEqual(run.call_count, 1)
+
     def test_secrets_are_reused_only_when_still_stubbed(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n')

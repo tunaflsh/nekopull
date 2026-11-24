@@ -744,6 +744,7 @@ def load_config(
     *,
     migrate: bool = True,
     cache: dict[str, str] | None = None,
+    resolve: bool = True,
 ) -> Config:
     path = Path(path)
     try:
@@ -765,9 +766,18 @@ def load_config(
     secrets = {} if cache is None else cache
     stubbed: list[str] = []
     apikey = _credential(
-        path, raw, "apikey", "apikey", stash=stash, stubbed=stubbed, cache=secrets
+        path,
+        raw,
+        "apikey",
+        "apikey",
+        stash=stash,
+        stubbed=stubbed,
+        cache=secrets,
+        resolve=resolve,
     )
-    if not apikey:
+    if not apikey and str(raw.get("apikey")) == APIKEY_STUB:
+        apikey_source = "libsecret (not read)"
+    elif not apikey:
         apikey_source = "none (anonymous)"
     elif str(raw.get("apikey")) == APIKEY_STUB:
         apikey_source = f"libsecret ({SECRET_SERVICE}/{SECRET_APIKEY})"
@@ -846,6 +856,7 @@ def load_config(
             stash=stash,
             stubbed=stubbed,
             cache=secrets,
+            resolve=resolve,
         ),
         password=_credential(
             path,
@@ -855,6 +866,7 @@ def load_config(
             stash=stash,
             stubbed=stubbed,
             cache=secrets,
+            resolve=resolve,
         ),
         download_dir=client_raw.get("download_dir"),
     )
@@ -902,6 +914,7 @@ def _credential(
     stubbed: list[str],
     required: bool = False,
     cache: dict[str, str] | None = None,
+    resolve: bool = True,
 ) -> str:
     value = table.get(key)
     if value is None or value == "":
@@ -910,6 +923,8 @@ def _credential(
         return ""
     value = str(value)
     if value == APIKEY_STUB:
+        if not resolve:
+            return ""  # this command has no use for the secret
         if cache is not None and name in cache:
             return cache[name]
         stored = read_secret(name)
@@ -1634,8 +1649,14 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stderr,
     )
     migrate = options.command in {"run", "verify"} and not getattr(options, "dry_run", False)
+    # Resolve secrets only where they are used: `list`, `annotate` and a dry
+    # run only reach nekoBT's public endpoints and must not block on a locked
+    # keyring.
+    resolve = options.command in {"verify", "daemon"} or (
+        options.command == "run" and not getattr(options, "dry_run", False)
+    )
     try:
-        config = load_config(options.config, migrate=migrate)
+        config = load_config(options.config, migrate=migrate, resolve=resolve)
     except ConfigError as exc:
         if options.command == "lookup":
             config = None  # lookup talks to nekoBT's public search only

@@ -160,6 +160,10 @@ Entries are stored as `service nekopull username <name>`, where `<name>` is
 read back at start-up, so `config.toml` holds no secrets. Without libsecret the
 values stay in the file and are used as is; `--dry-run` never rewrites anything.
 
+Only commands that need the secrets read them: `run` (not a dry run),
+`verify` and `daemon`. `list`, `annotate` and `--dry-run` work with a locked
+keyring, because nekoBT's public endpoints need no key.
+
 If the keyring is reset, nekopull names the missing entry — put a real value
 back in the file and it will be stored again.
 
