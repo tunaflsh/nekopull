@@ -128,6 +128,10 @@ class ReleaseParsingTest(unittest.TestCase):
         self.assertEqual(
             release_from_item(ITEM, EPISODES).magnet, "magnet:?xt=urn:btih:private"
         )
+        self.assertEqual(
+            release_from_item(ITEM, EPISODES, private_magnet=False).magnet,
+            "magnet:?xt=urn:btih:public",
+        )
 
     def test_a_pack_maps_to_its_season(self):
         pack = dict(ITEM, media_episode_ids=["546146", "546147"], batch=True)
@@ -146,9 +150,8 @@ class ReleaseParsingTest(unittest.TestCase):
         release = release_from_item(orphan, EPISODES)
         self.assertEqual((release.season, release.episode), (2, 3))
 
-    def test_group_falls_back_to_the_title_prefix(self):
-        item = dict(ITEM, groups=[])
-        self.assertEqual(release_from_item(item, EPISODES).group, "Anarchy")
+    def test_anonymous_release_has_no_group(self):
+        self.assertIsNone(release_from_item(dict(ITEM, groups=[]), EPISODES).group)
 
 
 class FilterTest(unittest.TestCase):
@@ -274,6 +277,11 @@ class FetchTest(unittest.TestCase):
         self.assertEqual(query["video_codec"], "2,3")
         self.assertEqual(query["video_type"], "9")
 
+    def test_private_magnet_is_configurable(self):
+        _, _, _ = self._call()
+        releases, _, _ = self._call(private_magnet=False)
+        self.assertEqual(releases[0].magnet, "magnet:?xt=urn:btih:public")
+
     def test_allow_batch_drops_the_batch_filter(self):
         _, query, _ = self._call(allow_batch=True)
         self.assertNotIn("batch", query)
@@ -298,6 +306,7 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(config.apikey_source, "config file")
             self.assertEqual(config.shows[0].media_id, "s1")
             self.assertEqual(config.client.type, "transmission")
+            self.assertTrue(config.private_magnet)
             self.assertEqual(config.state_path, path.parent / "state.db")
 
     def test_show_override_merge(self):
@@ -336,6 +345,21 @@ class ConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
                 tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nvideo_type = "bluray"\n'
+            )
+            with self.assertRaises(ConfigError):
+                load_config(path, migrate=False)
+
+    def test_private_magnet_can_be_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "k"\nprivate_magnet = false\n\n[[show]]\nmedia_id = "s1"\n'
+            )
+            self.assertFalse(load_config(path, migrate=False).private_magnet)
+
+    def test_private_magnet_must_be_boolean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "k"\nprivate_magnet = "no"\n\n[[show]]\nmedia_id = "s1"\n'
             )
             with self.assertRaises(ConfigError):
                 load_config(path, migrate=False)

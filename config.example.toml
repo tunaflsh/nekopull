@@ -4,6 +4,10 @@
 # when secret-tool is available, leaving `apikey = "libsecret"` behind.
 apikey = "YOUR-API-KEY"
 
+# Hand your private magnet to the client so downloads count on your account.
+# false uses the public magnet instead.
+# private_magnet = true
+
 # Sub levels to accept: 0 official, 1 lightly edited official, 2 small fansubs,
 # 3 full fansubs. Unset means any level; the highest accepted one wins.
 [defaults]

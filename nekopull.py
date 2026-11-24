@@ -59,8 +59,6 @@ _EP_NXNN = re.compile(r"(?i)\b(\d{1,2})x(\d{1,3})(?:v(\d+))?\b")
 _EP_PREFIXED = re.compile(r"(?i)\bEP?(\d{1,4})(?:v(\d+))?\b")
 _EP_DASH = re.compile(r"(?:^|\s)-\s(\d{1,4})(?:v(\d+))?(?=[\s\[(]|$)")
 _RESOLUTION = re.compile(r"(?i)\b(2160p|1440p|1080p|720p|576p|480p)\b")
-_GROUP_PREFIX = re.compile(r"^\s*\[([^\]]+)\]")
-_INFOHASH = re.compile(r"urn:btih:([0-9a-zA-Z]{32,40})")
 
 
 
@@ -176,7 +174,9 @@ def parse_episode(title: str) -> tuple[int, int, bool]:
     return 0, 0, False
 
 
-def release_from_item(item: dict, episodes: dict[str, dict]) -> Release:
+def release_from_item(
+    item: dict, episodes: dict[str, dict], *, private_magnet: bool = True
+) -> Release:
     """Build a :class:`Release` from a ``/torrents/search`` result.
 
     ``episodes`` is the ``media.episodes`` map from the same response, which is
@@ -190,9 +190,6 @@ def release_from_item(item: dict, episodes: dict[str, dict]) -> Release:
     groups = item.get("groups") or []
     if groups:
         group = str(groups[0].get("name") or groups[0].get("display_name") or "") or None
-    if group is None:
-        prefix = _GROUP_PREFIX.match(clean)
-        group = prefix.group(1).strip() if prefix else None
 
     mapped = [
         episodes[str(episode_id)]
@@ -209,11 +206,12 @@ def release_from_item(item: dict, episodes: dict[str, dict]) -> Release:
     else:
         season, episode, _ = parse_episode(clean)
 
-    magnet = str(item.get("private_magnet") or item.get("magnet") or "")
+    magnet = str(
+        (item.get("private_magnet") if private_magnet else item.get("magnet"))
+        or item.get("magnet")
+        or ""
+    )
     infohash = str(item.get("infohash") or "").lower()
-    if not infohash:
-        match = _INFOHASH.search(magnet)
-        infohash = match.group(1).lower() if match else ""
 
     return Release(
         title=title,
@@ -287,6 +285,7 @@ def fetch_releases(
     codecs: list[str] | None = None,
     video_types: list[str] | None = None,
     allow_batch: bool = False,
+    private_magnet: bool = True,
 ) -> list[Release]:
     """Fetch releases for ``media_id`` from nekoBT's search API.
 
@@ -322,7 +321,8 @@ def fetch_releases(
         if entry.get("id") is not None
     }
     return [
-        release_from_item(item, episodes) for item in block.get("results") or []
+        release_from_item(item, episodes, private_magnet=private_magnet)
+        for item in block.get("results") or []
     ]
 
 
@@ -456,6 +456,7 @@ class Config:
     shows: list[Show]
     client: ClientConfig = field(default_factory=ClientConfig)
     state_path: Path = STATE_PATH
+    private_magnet: bool = True
 
 
 _SHOW_KEYS = {
@@ -588,8 +589,12 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
             " replace them with the stub by hand"
         )
 
+    private_magnet = raw.get("private_magnet", True)
+    if not isinstance(private_magnet, bool):
+        raise ConfigError(f"{path}: `private_magnet` must be true or false")
+
     state_path = Path(raw.get("state_path", path.parent / "state.db"))
-    return Config(apikey, apikey_source, defaults, shows, client, state_path)
+    return Config(apikey, apikey_source, defaults, shows, client, state_path, private_magnet)
 
 
 def _credential(
@@ -947,6 +952,7 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                     codecs=settings.codecs,
                     video_types=settings.video_types,
                     allow_batch=settings.allow_batch,
+                    private_magnet=config.private_magnet,
                 )
             except NekobtError as exc:
                 LOG.error("%s: %s", show.name, exc)
@@ -1018,7 +1024,9 @@ def command_verify(config: Config) -> int:
     failures = 0
     print(f"api key: {config.apikey_source}")
     try:
-        releases = fetch_releases(config.apikey, config.shows[0].media_id, limit=1)
+        releases = fetch_releases(
+            config.apikey, config.shows[0].media_id, limit=1, private_magnet=config.private_magnet
+        )
     except NekobtError as exc:
         print(f"nekoBT: {exc}", file=sys.stderr)
         failures += 1

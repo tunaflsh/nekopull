@@ -5,7 +5,8 @@ new episodes and hands the magnet link to your torrent client — Transmission
 today, others by adding a backend.
 
 Season and episode come from nekoBT's own mapping of a release to episodes, so
-`- 55`, `EP382` and `S01E07` all resolve to the same episode.
+`- 55`, `EP382` and `S01E07` all resolve to the same episode. Torrents the site
+has not mapped yet (a fresh upload) fall back to the title.
 
 ## Dependencies
 
@@ -83,6 +84,7 @@ Everything except `[[show]]` is optional.
 | key | default | meaning |
 | --- | --- | --- |
 | `apikey` | — | nekoBT API key; moved to libsecret automatically when available |
+| `private_magnet` | `true` | add your private magnet (carries your passkey) rather than the public one |
 | `state_path` | `~/.local/state/nekopull/state.db` | where grabbed episodes are recorded |
 
 ### `[defaults]` and per-show overrides
