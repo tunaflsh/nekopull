@@ -25,6 +25,7 @@ from nekopull import (  # noqa: E402
     ConfigError,
     Defaults,
     Release,
+    Show,
     State,
     Transmission,
     load_config,
@@ -983,6 +984,66 @@ class CliTest(unittest.TestCase):
         self.assertEqual(nekopull._parse_interval("2h"), 7200)
         with self.assertRaises(ConfigError):
             nekopull._parse_interval("daily")
+
+    def test_fetch_pages_until_a_short_page(self):
+        seen_offsets = []
+
+        def fake_page(apikey, media_id, **options):
+            seen_offsets.append(options["offset"])
+            if options["offset"] == 0:
+                return "Title", [make_release(season=3, episode=2), make_release(season=3, episode=1)]
+            return "Title", [make_release(season=2, episode=5)]
+
+        with mock.patch("nekopull._fetch_page", side_effect=fake_page):
+            releases, title = nekopull.fetch_feed("k", "s1", limit=2)
+        self.assertEqual(seen_offsets, [0, 2])
+        self.assertEqual(len(releases), 3)
+        self.assertEqual(title, "Title")
+
+    def test_fetch_stops_once_a_page_is_at_the_boundary(self):
+        seen_offsets = []
+
+        def fake_page(apikey, media_id, **options):
+            seen_offsets.append(options["offset"])
+            return "Title", [make_release(season=3, episode=1), make_release(season=3, episode=0)]
+
+        with mock.patch("nekopull._fetch_page", side_effect=fake_page):
+            releases, _ = nekopull.fetch_feed("k", "s1", limit=2, boundary=(3, 1))
+        self.assertEqual(seen_offsets, [0])
+        self.assertEqual(len(releases), 2)
+
+    def test_fetch_pages_through_batches_without_stopping(self):
+        seen_offsets = []
+
+        def fake_page(apikey, media_id, **options):
+            seen_offsets.append(options["offset"])
+            if options["offset"] == 0:
+                batch = make_release(season=3, episode=0)
+                batch.batch = True
+                return "Title", [batch, make_release(season=3, episode=9)]
+            return "Title", []
+
+        with mock.patch("nekopull._fetch_page", side_effect=fake_page):
+            nekopull.fetch_feed("k", "s1", limit=2, boundary=(3, 1))
+        self.assertEqual(seen_offsets, [0, 2])
+
+    def test_seen_boundary_takes_the_larger_of_begin_and_history(self):
+        state = mock.Mock()
+        state.newest_episode.return_value = (2, 12)
+        self.assertEqual(nekopull._seen_boundary(Show("s1", begin=(3, 1)), state), (3, 1))
+        state.newest_episode.return_value = (3, 5)
+        self.assertEqual(nekopull._seen_boundary(Show("s1", begin=(3, 1)), state), (3, 5))
+        state.newest_episode.return_value = None
+        self.assertIsNone(nekopull._seen_boundary(Show("s1"), state))
+
+    def test_newest_episode_comes_from_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with nekopull.State(Path(tmp) / "state.db") as state:
+                self.assertIsNone(state.newest_episode("s1"))
+                state.record("s1", make_release(season=2, episode=7))
+                state.record("s1", make_release(season=2, episode=9, infohash="b"))
+                state.record("s9", make_release(season=9, episode=9, infohash="c"))
+                self.assertEqual(state.newest_episode("s1"), (2, 9))
 
     def test_secrets_are_reused_only_when_still_stubbed(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -118,10 +118,15 @@ untagged release is skipped when the list is set.
 `bd_remux`, `dvd_disc`, `dvd_raw`, `dvd_encode`, `tv_raw`, `tv_encode`, `vhs`,
 `laserdisc`, `hybrid`, `other`.
 
-`levels`, `codec` and `type` are also sent to nekoBT, so the newest-100
-window contains matching releases instead of whatever was uploaded last. A
-`codec` or `type` list containing a value the API does not know stays a local
-filter.
+`levels`, `codec` and `type` are also sent to nekoBT, so each page holds
+matching releases instead of whatever was uploaded last. A `codec` or `type`
+list containing a value the API does not know stays a local filter.
+
+Releases are read newest-first, 100 at a time. A show with no history is read
+back to its first release; once episodes have been grabbed, paging stops at the
+newest one already recorded, and `begin` is the floor where it applies. So a
+long-running show is not re-read every poll, and a newly added one is not
+limited to the last 100 uploads.
 
 ### `[client]`
 

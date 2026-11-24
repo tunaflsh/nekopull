@@ -33,6 +33,10 @@ __version__ = "0.3.0"
 LOG = logging.getLogger("nekopull")
 
 JSON_SEARCH_URL = "https://nekobt.to/api/v1/torrents/search"
+
+# A safety net, not a real limit: a long show with many groups can need a few
+# dozen pages. Stopping at a boundary means normal polls fetch one page.
+_MAX_PAGES = 200
 MEDIA_SEARCH_URL = "https://nekobt.to/api/v1/media/search"
 USER_AGENT = f"nekopull/{__version__}"
 
@@ -349,6 +353,7 @@ def fetch_releases(
     video_types: list[str] | None = None,
     allow_batch: bool = False,
     private_magnet: bool = True,
+    boundary: tuple[int, int] | None = None,
 ) -> list[Release]:
     """Fetch the releases nekoBT holds for ``media_id``."""
     return _fetch(
@@ -360,6 +365,7 @@ def fetch_releases(
         video_types=video_types,
         allow_batch=allow_batch,
         private_magnet=private_magnet,
+        boundary=boundary,
     )[0]
 
 
@@ -373,6 +379,7 @@ def fetch_feed(
     video_types: list[str] | None = None,
     allow_batch: bool = False,
     private_magnet: bool = True,
+    boundary: tuple[int, int] | None = None,
 ) -> tuple[list[Release], str | None]:
     """Fetch releases plus the media's own title."""
     return _fetch(
@@ -384,6 +391,7 @@ def fetch_feed(
         video_types=video_types,
         allow_batch=allow_batch,
         private_magnet=private_magnet,
+        boundary=boundary,
     )
 
 
@@ -397,13 +405,64 @@ def _fetch(
     video_types: list[str] | None = None,
     allow_batch: bool = False,
     private_magnet: bool = True,
+    boundary: tuple[int, int] | None = None,
+    max_pages: int = _MAX_PAGES,
 ) -> tuple[list[Release], str | None]:
-    """Fetch releases for ``media_id`` from nekoBT's search API.
+    """Fetch releases for ``media_id``, walking back page by page.
 
     The response carries each torrent's episode ids plus the media's episode
     map, so season and episode come from the site rather than from the title.
+    Paging stops at ``boundary`` (the newest episode already grabbed, or the
+    per-show ``begin``): everything older is either already in the client or
+    excluded, and a show with no such marker is read to the end.
     """
-    params = {"media_id": media_id, "sort_by": "latest", "limit": str(limit)}
+    page_limit = max(1, min(int(limit), 100))
+    releases: list[Release] = []
+    title: str | None = None
+    offset = 0
+    for _ in range(max_pages):
+        title, page = _fetch_page(
+            apikey,
+            media_id,
+            offset=offset,
+            limit=page_limit,
+            levels=levels,
+            codecs=codecs,
+            video_types=video_types,
+            allow_batch=allow_batch,
+            private_magnet=private_magnet,
+        )
+        releases.extend(page)
+        if len(page) < page_limit:
+            break
+        keys = [release.episode_key for release in page if not release.batch]
+        if boundary is not None and keys and max(keys) <= boundary:
+            break
+        offset += page_limit
+    else:
+        LOG.warning("%s: stopped paging after %d pages", media_id, max_pages)
+    return releases, title
+
+
+def _fetch_page(
+    apikey: str,
+    media_id: str,
+    *,
+    offset: int,
+    limit: int,
+    levels: list[int] | None = None,
+    codecs: list[str] | None = None,
+    video_types: list[str] | None = None,
+    allow_batch: bool = False,
+    private_magnet: bool = True,
+) -> tuple[str | None, list[Release]]:
+    params = {
+        "media_id": media_id,
+        "sort_by": "latest",
+        "limit": str(limit),
+    }
+    if offset:
+        params["offset"] = str(offset)
     if not allow_batch:
         params["batch"] = "false"
     if levels:
@@ -435,7 +494,7 @@ def _fetch(
         release_from_item(item, episodes, private_magnet=private_magnet)
         for item in block.get("results") or []
     ]
-    return releases, media.get("title")
+    return media.get("title"), releases
 
 
 def _video_type_ids(video_types: list[str]) -> list[int]:
@@ -450,6 +509,7 @@ def _codec_ids(codecs: list[str]) -> list[int]:
 
 
 ME_URL = "https://nekobt.to/api/v1/users/@me"
+
 
 
 def _auth(apikey: str) -> dict[str, str]:
@@ -985,6 +1045,14 @@ class State:
         ).fetchone()
         return row is not None
 
+    def newest_episode(self, media_id: str) -> tuple[int, int] | None:
+        row = self._connection.execute(
+            "SELECT season, episode FROM grabbed WHERE media_id = ?"
+            " ORDER BY season DESC, episode DESC LIMIT 1",
+            (media_id,),
+        ).fetchone()
+        return (row[0], row[1]) if row else None
+
     def has_episode(self, media_id: str, season: int, episode: int) -> bool:
         row = self._connection.execute(
             "SELECT 1 FROM grabbed WHERE media_id = ? AND season = ? AND episode = ?",
@@ -1247,6 +1315,15 @@ def command_daemon(config: Config, options: argparse.Namespace) -> int:
         time.sleep(max(0.0, min(1.0, next_poll - time.monotonic())))
 
 
+def _seen_boundary(show: Show, state: State) -> tuple[int, int] | None:
+    """How far back paging has to go: the newest grabbed episode, or ``begin``."""
+    boundary = show.begin if isinstance(show.begin, tuple) else None
+    newest = state.newest_episode(show.media_id)
+    if newest is not None:
+        boundary = newest if boundary is None else max(boundary, newest)
+    return boundary
+
+
 def _config_mtime(path: Path) -> float | None:
     try:
         return path.stat().st_mtime
@@ -1287,6 +1364,7 @@ def _run_once(config: Config, *, dry_run: bool = False, only: list[str] | None =
                     video_types=settings.video_types,
                     allow_batch=settings.allow_batch,
                     private_magnet=settings.private_magnet,
+                    boundary=_seen_boundary(show, state),
                 )
             except NekobtError as exc:
                 LOG.error("%s: %s", label, exc)
