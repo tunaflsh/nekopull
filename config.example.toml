@@ -32,7 +32,7 @@ password = ""
 media_id = "s1539"
 name = "towa no yuugure"
 
-# Per-show keys override [defaults]:
+# Per-show keys override [defaults], and private_magnet can be set here too:
 [[show]]
 media_id = "s4147"
 name = "enen no shouboutai"

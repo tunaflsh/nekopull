@@ -6,7 +6,10 @@ today, others by adding a backend.
 
 Season and episode come from nekoBT's own mapping of a release to episodes, so
 `- 55`, `EP382` and `S01E07` all resolve to the same episode. Torrents the site
-has not mapped yet (a fresh upload) fall back to the title.
+has not mapped yet (a fresh upload) fall back to the title, with an absolute
+number resolved through the media's episode list — so `- 55` and `S03E07` are
+the same key, and an absolute number the media does not know is skipped rather
+than guessed.
 
 ## Dependencies
 
@@ -84,7 +87,7 @@ Everything except `[[show]]` is optional.
 | key | default | meaning |
 | --- | --- | --- |
 | `apikey` | — | nekoBT API key; moved to libsecret automatically when available |
-| `private_magnet` | `true` | add your private magnet (carries your passkey) rather than the public one |
+| `private_magnet` | `true` | use your private magnet (carries your passkey); can be set per show |
 | `state_path` | `~/.local/state/nekopull/state.db` | where grabbed episodes are recorded |
 
 ### `[defaults]` and per-show overrides

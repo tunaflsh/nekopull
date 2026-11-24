@@ -140,10 +140,20 @@ class ReleaseParsingTest(unittest.TestCase):
         self.assertEqual(release.episode, 0)
         self.assertTrue(release.batch)
 
-    def test_falls_back_to_the_title_without_episode_ids(self):
-        orphan = dict(ITEM, media_episode_ids=[], title="[Erai-raws] Show - 08 [1080p]")
+    def test_fallback_resolves_an_absolute_number(self):
+        orphan = dict(ITEM, media_episode_ids=[], title="[Erai-raws] Show - 54 [1080p]")
         release = release_from_item(orphan, EPISODES)
-        self.assertEqual((release.season, release.episode), (0, 8))
+        self.assertEqual((release.season, release.episode), (3, 6))
+
+    def test_fallback_keeps_an_explicit_season(self):
+        orphan = dict(ITEM, media_episode_ids=[], title="[X] Show S02E03 1080p")
+        release = release_from_item(orphan, EPISODES)
+        self.assertEqual((release.season, release.episode), (2, 3))
+
+    def test_fallback_drops_an_unknown_absolute_number(self):
+        orphan = dict(ITEM, media_episode_ids=[], title="[Erai-raws] Show - 99 [1080p]")
+        release = release_from_item(orphan, EPISODES)
+        self.assertEqual((release.season, release.episode), (0, 0))
 
     def test_unknown_episode_id_is_ignored(self):
         orphan = dict(ITEM, media_episode_ids=["999"], title="Show S02E03 1080p")
@@ -345,6 +355,25 @@ class ConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
                 tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nvideo_type = "bluray"\n'
+            )
+            with self.assertRaises(ConfigError):
+                load_config(path, migrate=False)
+
+    def test_private_magnet_per_show(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nprivate_magnet = false\n',
+            )
+            config = load_config(path, migrate=False)
+            self.assertFalse(config.shows[0].private_magnet)
+            self.assertTrue(config.private_magnet)
+
+    def test_private_magnet_per_show_must_be_boolean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nprivate_magnet = "yes"\n',
             )
             with self.assertRaises(ConfigError):
                 load_config(path, migrate=False)

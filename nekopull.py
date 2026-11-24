@@ -174,6 +174,28 @@ def parse_episode(title: str) -> tuple[int, int, bool]:
     return 0, 0, False
 
 
+def _normalise_fallback(
+    season: int, episode: int, episodes: dict[str, dict]
+) -> tuple[int, int]:
+    """Map a title-derived identifier onto the site's season/episode numbering.
+
+    Absolute numbers (``- 55``) must resolve to the same pair a mapped torrent
+    would get, otherwise the same episode could be grabbed twice. An absolute
+    number that the media does not know is dropped rather than guessed.
+    """
+    if season > 0 or episode <= 0:
+        return season, episode
+    matches = [
+        entry for entry in episodes.values() if int(entry.get("absolute") or 0) == episode
+    ]
+    if not matches:
+        return 0, 0
+    best = max(
+        matches, key=lambda entry: (int(entry.get("season") or 0), int(entry.get("episode") or 0))
+    )
+    return int(best.get("season") or 0), int(best.get("episode") or 0)
+
+
 def release_from_item(
     item: dict, episodes: dict[str, dict], *, private_magnet: bool = True
 ) -> Release:
@@ -205,6 +227,7 @@ def release_from_item(
         episode = 0
     else:
         season, episode, _ = parse_episode(clean)
+        season, episode = _normalise_fallback(season, episode, episodes)
 
     magnet = str(
         (item.get("private_magnet") if private_magnet else item.get("magnet"))
@@ -418,6 +441,7 @@ class Show:
     resolutions: list[str] | None = None
     groups: list[str] | None = None
     allow_batch: bool | None = None
+    private_magnet: bool | None = None
 
     def overrides(self) -> dict:
         return {
@@ -468,6 +492,7 @@ _SHOW_KEYS = {
     "resolutions",
     "groups",
     "allow_batch",
+    "private_magnet",
 }
 _DEFAULT_KEYS = {"levels", "codec", "video_type", "resolutions", "allow_batch", "groups"}
 _CLIENT_KEYS = {"type", "url", "username", "password", "download_dir"}
@@ -548,6 +573,8 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
         media_id = entry.get("media_id")
         if not media_id:
             raise ConfigError(f"{path}: show #{index} is missing `media_id`")
+        if "private_magnet" in entry and not isinstance(entry["private_magnet"], bool):
+            raise ConfigError(f"{path}: show #{index}: `private_magnet` must be true or false")
         shows.append(
             Show(
                 media_id=str(media_id),
@@ -558,6 +585,7 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
                 resolutions=entry.get("resolutions"),
                 groups=entry.get("groups"),
                 allow_batch=entry.get("allow_batch"),
+                private_magnet=entry.get("private_magnet"),
             )
         )
     if not shows:
@@ -952,7 +980,11 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                     codecs=settings.codecs,
                     video_types=settings.video_types,
                     allow_batch=settings.allow_batch,
-                    private_magnet=config.private_magnet,
+                    private_magnet=(
+                        config.private_magnet
+                        if show.private_magnet is None
+                        else show.private_magnet
+                    ),
                 )
             except NekobtError as exc:
                 LOG.error("%s: %s", show.name, exc)
