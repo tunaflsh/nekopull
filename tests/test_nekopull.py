@@ -353,6 +353,32 @@ class ConfigTest(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_config(path, migrate=False)
 
+    def test_begin_skips_older_episodes(self):
+        settings = Defaults(begin=(3, 7))
+        self.assertFalse(passes_filters(make_release(season=3, episode=6), settings))
+        self.assertTrue(passes_filters(make_release(season=3, episode=7), settings))
+        self.assertTrue(passes_filters(make_release(season=4, episode=1), settings))
+
+    def test_begin_parsing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[defaults]\nbegin = "S03"\n\n'
+                '[[show]]\nmedia_id = "s1"\nbegin = "S03E07"\n',
+            )
+            config = load_config(path, migrate=False)
+            self.assertEqual(config.defaults.begin, (3, 0))
+            merged = config.defaults.merged(config.shows[0].overrides())
+            self.assertEqual(merged.begin, (3, 7))
+
+    def test_invalid_begin_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nbegin = "3x07"\n'
+            )
+            with self.assertRaises(ConfigError):
+                load_config(path, migrate=False)
+
     def test_batch_key_and_override(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(

@@ -13,6 +13,7 @@ apikey = "YOUR-API-KEY"
 resolutions = ["1080p"]
 batch = false
 # private_magnet = true    # private magnet carries your passkey; false = public
+# begin = "S03E07"         # ignore anything older than this episode
 # groups = ["erai-raws"]   # preference only, never a filter
 
 [client]

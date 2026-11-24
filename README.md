@@ -4,13 +4,6 @@ A small poller for nekoBT. It checks the shows you list for
 new episodes and hands the magnet link to your torrent client — Transmission
 today, others by adding a backend.
 
-Season and episode come from nekoBT's own mapping of a release to episodes, so
-`- 55`, `EP382` and `S01E07` all resolve to the same episode. Torrents the site
-has not mapped yet (a fresh upload) fall back to the title, with an absolute
-number resolved through the media's episode list — so `- 55` and `S03E07` are
-the same key, and an absolute number the media does not know is skipped rather
-than guessed.
-
 ## Dependencies
 
 Python 3.11+
@@ -101,6 +94,7 @@ Any key here can also be set on a single `[[show]]` to override it.
 | `resolutions` | `["1080p"]` | accepted resolutions, read from the title; a release without one is skipped |
 | `groups` | `[]` | release groups to prefer (a preference, not a filter) |
 | `batch` | `false` | accept season batches, tracked per season |
+| `begin` | unset | skip episodes before this one, e.g. `S03E07` or `S03` |
 | `private_magnet` | `true` | hand over your private magnet (carries your passkey) |
 
 One release is taken per episode. When several match, the order of preference is

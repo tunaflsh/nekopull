@@ -415,6 +415,7 @@ class Defaults:
     resolutions: list[str] = field(default_factory=lambda: ["1080p"])
     allow_batch: bool = False
     private_magnet: bool = True
+    begin: tuple[int, int] | None = None
     groups: list[str] = field(default_factory=list)
 
     def merged(self, overrides: dict) -> Defaults:
@@ -425,6 +426,7 @@ class Defaults:
             "resolutions": list(self.resolutions),
             "allow_batch": self.allow_batch,
             "private_magnet": self.private_magnet,
+            "begin": self.begin,
             "groups": list(self.groups),
         }
         for key, value in overrides.items():
@@ -444,6 +446,7 @@ class Show:
     groups: list[str] | None = None
     allow_batch: bool | None = None
     private_magnet: bool | None = None
+    begin: tuple[int, int] | None = None
 
     def overrides(self) -> dict:
         return {
@@ -453,6 +456,7 @@ class Show:
             "resolutions": None if self.resolutions is None else list(self.resolutions),
             "allow_batch": self.allow_batch,
             "private_magnet": self.private_magnet,
+            "begin": self.begin,
             "groups": None if self.groups is None else list(self.groups),
         }
 
@@ -489,6 +493,7 @@ _TOP_LEVEL_KEYS = {"apikey", "state_path", "defaults", "show", "client"}
 _SHOW_KEYS = {
     "media_id",
     "name",
+    "begin",
     "levels",
     "codec",
     "type",
@@ -498,6 +503,7 @@ _SHOW_KEYS = {
     "private_magnet",
 }
 _DEFAULT_KEYS = {
+    "begin",
     "levels",
     "codec",
     "type",
@@ -515,6 +521,18 @@ _CODECS = set(_CODEC_IDS)
 
 def _as_list(value) -> list:
     return list(value) if isinstance(value, (list, tuple)) else [value]
+
+
+_BEGIN = re.compile(r"(?i)^\s*S(\d{1,2})(?:E(\d{1,3}))?\s*$")
+
+
+def _begin_value(path: Path, where: str, value) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    match = _BEGIN.match(str(value))
+    if not match:
+        raise ConfigError(f"{path}: {where} `begin` must look like S03 or S03E07")
+    return int(match.group(1)), int(match.group(2) or 0)
 
 
 def _video_type_list(path: Path, where: str, value) -> list[str] | None:
@@ -579,6 +597,8 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
             raise ConfigError(f"{path}: unknown defaults key `{key}`")
         if key == "codec":
             defaults.codecs = _codec_list(path, "[defaults]", value) or []
+        elif key == "begin":
+            defaults.begin = _begin_value(path, "[defaults]", value)
         elif key == "type":
             defaults.video_types = _video_type_list(path, "[defaults]", value) or []
         elif key == "batch":
@@ -618,6 +638,7 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
                 groups=entry.get("groups"),
                 allow_batch=entry.get("batch"),
                 private_magnet=entry.get("private_magnet"),
+                begin=_begin_value(path, f"show #{index}", entry.get("begin")),
             )
         )
     if not shows:
@@ -942,6 +963,8 @@ def passes_filters(release: Release, settings: Defaults) -> bool:
     if not settings.allow_batch and release.batch:
         return False
     if settings.resolutions and release.resolution not in settings.resolutions:
+        return False
+    if settings.begin is not None and release.episode_key < settings.begin:
         return False
     if settings.levels and release.level not in settings.levels:
         return False
