@@ -89,7 +89,7 @@ Any key here can also be set on a single `[[show]]` to override it.
 | key | default | meaning |
 | --- | --- | --- |
 | `levels` | any | sub levels to accept, e.g. `[2, 3]` |
-| `codec` | any | accepted codecs: `h264`, `h265`, `av1`, `vp9`, `vc1`, `mpeg2`, `mpeg4`; a string or a list |
+| `codec` | any | accepted codecs: `h264`, `h265`, `av1`, `vp9`, `mpeg2`, `xvid`, `wmv`, `vc1`; a string or a list |
 | `resolutions` | `["1080p"]` | accepted resolutions; a release without one is skipped |
 | `groups` | `[]` | release groups to prefer (a preference, not a filter) |
 | `allow_batch` | `false` | accept season batches |
@@ -110,8 +110,8 @@ Leave `levels` unset to accept any. Only listed levels are eligible, and an
 untagged release is skipped when the list is set.
 
 `levels` and `codec` are also sent to nekoBT, so the newest-100 window contains
-matching releases instead of whatever was uploaded last. `mpeg4` has no API id,
-so a `codec` list containing it stays a local filter.
+matching releases instead of whatever was uploaded last. A `codec` list containing a value the API does not know stays a local
+filter.
 
 ### `[client]`
 

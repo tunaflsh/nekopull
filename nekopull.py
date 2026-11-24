@@ -75,10 +75,11 @@ _CODEC_TOKENS = {
     "vc1": "vc1",
     "mpeg-2": "mpeg2",
     "mpeg2": "mpeg2",
-    "mpeg-4": "mpeg4",
-    "mpeg4": "mpeg4",
-    "divx": "mpeg4",
-    "xvid": "mpeg4",
+    "mpeg-4": "xvid",
+    "mpeg4": "xvid",
+    "divx": "xvid",
+    "xvid": "xvid",
+    "wmv": "wmv",
 }
 _CODEC = re.compile(
     r"(?i)\b("
@@ -134,9 +135,21 @@ class Release:
         return (self.season, self.episode)
 
 
-# nekoBT's video codec ids, discovered by probing ?video_codec=N and comparing
-# the returned releases: C1=h264, C2=h265, C3=av1, C4=vp9, C5=mpeg2.
-_CODEC_IDS = {"h264": 1, "h265": 2, "av1": 3, "vp9": 4, "mpeg2": 5}
+# nekoBT's video codec ids, taken from the site's own enum (the frontend bundle
+# defines H264=1, H265=2, AV1=3, VP9=4, MPEG2=5, XVID=6, WMV=7, VC1=8,
+# Other=0). Probing ?video_codec=N only reveals the ids that have releases, so
+# it under-reports: XviD/WMV/VC1 exist but are unused. "other" has no useful
+# meaning here, so it is not accepted.
+_CODEC_IDS = {
+    "h264": 1,
+    "h265": 2,
+    "av1": 3,
+    "vp9": 4,
+    "mpeg2": 5,
+    "xvid": 6,
+    "wmv": 7,
+    "vc1": 8,
+}
 _CODEC_BY_INDEX = {index: name for name, index in _CODEC_IDS.items()}
 
 

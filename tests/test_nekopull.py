@@ -180,9 +180,10 @@ class SelectTest(unittest.TestCase):
     def test_other_codecs_are_recognised(self):
         for title, expected in (
             ("Show S01E01 1080p VP9", "vp9"),
-            ("Show S01E01 DVD XviD", "mpeg4"),
+            ("Show S01E01 DVD XviD", "xvid"),
             ("Show S01E01 MPEG-2", "mpeg2"),
             ("Show S01E01 BD VC-1", "vc1"),
+            ("Show S01E01 TV WMV", "wmv"),
         ):
             self.assertEqual(parse_release(title, MAGNET).codec, expected, title)
 
@@ -505,9 +506,10 @@ class FeedRequestTest(unittest.TestCase):
         self.assertEqual(query["video_codec"], "2,3")
         self.assertEqual(query["media_id"], "s1")
 
-    def test_unmappable_codec_keeps_the_filter_local(self):
-        query = self._url_for(codecs=["h265", "mpeg4"])
-        self.assertNotIn("video_codec", query)
+    def test_codec_ids_are_all_or_nothing(self):
+        self.assertEqual(nekopull._codec_ids(["xvid", "wmv", "vc1"]), [6, 7, 8])
+        # a codec the API does not know keeps the whole filter local
+        self.assertEqual(nekopull._codec_ids(["h265", "not-a-codec"]), [])
 
     def test_no_filters_means_no_extra_params(self):
         query = self._url_for()
