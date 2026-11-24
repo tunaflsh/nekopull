@@ -594,11 +594,33 @@ class ConfigTest(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_config(path, migrate=False)
 
-    def test_missing_apikey(self):
+    def test_apikey_is_optional(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(tmp, '[[show]]\nmedia_id = "s1"\n')
-            with self.assertRaises(ConfigError):
-                load_config(path, migrate=False)
+            config = load_config(path, migrate=False)
+            self.assertEqual(config.apikey, "")
+            self.assertIn("anonymous", config.apikey_source)
+
+    def test_anonymous_requests_carry_no_cookie(self):
+        captured = {}
+
+        def fake_get(url, **options):
+            captured["headers"] = options.get("headers") or {}
+            return b'{"data": {"results": [], "media": {"episodes": []}}}'
+
+        with mock.patch("nekopull.http_get", fake_get):
+            nekopull.fetch_releases("", "s1")
+        self.assertEqual(captured["headers"], {})
+
+    def test_verify_is_fine_without_a_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, '[[show]]\nmedia_id = "s1"\n')
+            config = load_config(path, migrate=False)
+            client = SimpleNamespace(version=lambda: "4.0.6")
+            with mock.patch("nekopull.fetch_releases", return_value=[]), \
+                    mock.patch("nekopull.make_client", return_value=client), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(nekopull.command_verify(config), 0)
 
     def test_unknown_show_key(self):
         with tempfile.TemporaryDirectory() as tmp:

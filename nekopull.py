@@ -416,7 +416,7 @@ def _fetch(
         params["video_type"] = ",".join(str(index) for index in type_ids)
 
     url = f"{JSON_SEARCH_URL}?{urllib.parse.urlencode(params)}"
-    payload = http_get(url, headers={"Cookie": f"ssid={apikey}"})
+    payload = http_get(url, headers=_auth(apikey))
     try:
         answer = json.loads(payload)
     except json.JSONDecodeError as exc:
@@ -452,10 +452,15 @@ def _codec_ids(codecs: list[str]) -> list[int]:
 ME_URL = "https://nekobt.to/api/v1/users/@me"
 
 
+def _auth(apikey: str) -> dict[str, str]:
+    """An empty key means anonymous access; nekoBT's search allows that."""
+    return {"Cookie": f"ssid={apikey}"} if apikey else {}
+
+
 def api_key_valid(apikey: str) -> bool:
     """Whether nekoBT accepts the key. Search works anonymously, so ask /users/@me."""
     try:
-        payload = http_get(ME_URL, headers={"Cookie": f"ssid={apikey}"})
+        payload = http_get(ME_URL, headers=_auth(apikey))
     except NekobtError:
         return False
     try:
@@ -469,7 +474,7 @@ def media_title(apikey: str, media_id: str) -> str | None:
     """The title nekoBT uses for a media id."""
     payload = http_get(
         f"https://nekobt.to/api/v1/media/{urllib.parse.quote(str(media_id))}",
-        headers={"Cookie": f"ssid={apikey}"},
+        headers=_auth(apikey),
     )
     try:
         data = json.loads(payload).get("data") or {}
@@ -691,9 +696,11 @@ def load_config(
     secrets = {} if cache is None else cache
     stubbed: list[str] = []
     apikey = _credential(
-        path, raw, "apikey", "apikey", stash=stash, stubbed=stubbed, required=True, cache=secrets
+        path, raw, "apikey", "apikey", stash=stash, stubbed=stubbed, cache=secrets
     )
-    if str(raw.get("apikey")) == APIKEY_STUB:
+    if not apikey:
+        apikey_source = "none (anonymous)"
+    elif str(raw.get("apikey")) == APIKEY_STUB:
         apikey_source = f"libsecret ({SECRET_SERVICE}/{SECRET_APIKEY})"
     elif "apikey" in stubbed:
         apikey_source = "libsecret (migrated)"
@@ -1420,13 +1427,14 @@ def command_annotate(config: Config, options: argparse.Namespace) -> int:
 
 def command_verify(config: Config) -> int:
     failures = 0
-    print(f"api key: {config.apikey_source}")
-    if api_key_valid(config.apikey):
-        print("api key: accepted")
+    if not config.apikey:
+        print("api key: none — anonymous access, rate limited per address")
+    elif api_key_valid(config.apikey):
+        print(f"api key: accepted ({config.apikey_source})")
     else:
         print(
-            "api key: rejected — search works anonymously, so runs succeed"
-            " with lower rate limits and public magnets only",
+            f"api key: rejected ({config.apikey_source}) — runs continue"
+            " anonymously, with lower rate limits and public magnets only",
             file=sys.stderr,
         )
         failures += 1

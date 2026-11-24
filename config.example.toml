@@ -1,7 +1,9 @@
 # Copy to ~/.config/nekopull/config.toml
 
-# API key. On the first `run` or `verify`, nekopull moves it into libsecret
-# when secret-tool is available, leaving `apikey = "libsecret"` behind.
+# API key. Optional: without it nekoBT searches run anonymously, with lower
+# rate limits and public magnets only. On the first `run` or `verify`, nekopull
+# moves it into libsecret when secret-tool is available, leaving
+# `apikey = "libsecret"` behind.
 apikey = "YOUR-API-KEY"
 interval = "1d"          # time between daemon polls, e.g. 30m, 6h, 1d
 

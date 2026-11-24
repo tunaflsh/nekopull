@@ -27,7 +27,7 @@ python3 -m venv .venv && .venv/bin/pip install .
    `/usr/share/doc/nekopull/config.example.toml`):
 
    ```toml
-   apikey = "YOUR-API-KEY"
+   apikey = "YOUR-API-KEY"   # optional, see below
 
    [client]
    type = "transmission"
@@ -63,7 +63,7 @@ Everything except `[[show]]` is optional.
 
 | key | default | meaning |
 | --- | --- | --- |
-| `apikey` | — | nekoBT API key; moved to libsecret automatically when available |
+| `apikey` | — | optional nekoBT API key; without it searches run anonymously and magnets are public. Moved to libsecret automatically when available |
 | `state_path` | `~/.local/state/nekopull/state.db` | where grabbed episodes are recorded |
 | `interval` | `1d` | time between daemon polls, e.g. `30m`, `6h`, `1d` |
 
