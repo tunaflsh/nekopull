@@ -86,7 +86,7 @@ One block per show.
 
 | key | meaning |
 | --- | --- |
-| `media_id` | required; find it with `nekopull lookup` |
+| `media_id` | required; find it with `nekopull lookup` (`annotate` comments the title next to it) |
 | `name` | optional label for logs and client tags — falls back to nekoBT's own title |
 | `begin` | first episode to consider, per show only |
 
@@ -184,6 +184,7 @@ back in the file and it will be stored again.
 | `nekopull run --show NAME` | restrict to one show (repeatable) |
 | `nekopull lookup TEXT` | find show ids |
 | `nekopull list` | show configuration and overrides |
+| `nekopull annotate` | write nekoBT's title beside each `media_id` (`--dry-run` to preview) |
 | `nekopull verify` | check the API key, nekoBT and the client |
 
 Exit status: `0` success, `1` a show or the client failed, `2` configuration

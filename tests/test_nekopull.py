@@ -835,6 +835,57 @@ class CliTest(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(nekopull.command_lookup(options), 1)
 
+    def test_annotate_writes_titles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nname = "one"\n\n'
+                '[[show]]\n# nekoBT title: stale\nmedia_id = "s2"\nbegin = "S01E05"\n',
+            )
+            titles = {"s1": "Canonical One", "s2": "Canonical Two"}
+            options = SimpleNamespace(config=path, dry_run=False)
+            with mock.patch("nekopull.media_title", side_effect=lambda key, mid: titles[mid]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(nekopull.command_annotate(load_config(path, migrate=False), options), 0)
+            text = path.read_text()
+            self.assertIn('media_id = "s1"  # Canonical One', text)
+            self.assertIn('media_id = "s2"  # Canonical Two', text)
+            self.assertIn('name = "one"', text)
+            self.assertNotIn("nekoBT title:", text)
+            self.assertIn('begin = "S01E05"', text)
+
+    def test_annotate_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n')
+            options = SimpleNamespace(config=path, dry_run=False)
+            config = load_config(path, migrate=False)
+            with mock.patch("nekopull.media_title", return_value="One"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                nekopull.command_annotate(config, options)
+                first = path.read_text()
+                nekopull.command_annotate(config, options)
+            self.assertEqual(path.read_text(), first)
+
+    def test_annotate_dry_run_leaves_the_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n')
+            before = path.read_text()
+            options = SimpleNamespace(config=path, dry_run=True)
+            with mock.patch("nekopull.media_title", return_value="One"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(nekopull.command_annotate(load_config(path, migrate=False), options), 0)
+            self.assertEqual(path.read_text(), before)
+
+    def test_annotate_keeps_the_line_when_the_lookup_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n')
+            options = SimpleNamespace(config=path, dry_run=False)
+            with mock.patch("nekopull.media_title", side_effect=nekopull.NekobtError("down")), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                code = nekopull.command_annotate(load_config(path, migrate=False), options)
+            self.assertEqual(code, 1)
+            self.assertIn('media_id = "s1"', path.read_text())
+
     def test_secret_tool_detection(self):
         with mock.patch("nekopull.shutil.which", return_value="/usr/bin/secret-tool"):
             self.assertTrue(nekopull.secret_tool_available())

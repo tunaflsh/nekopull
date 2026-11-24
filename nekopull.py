@@ -1221,6 +1221,61 @@ def command_list(config: Config) -> int:
     return 0
 
 
+def command_annotate(config: Config, options: argparse.Namespace) -> int:
+    """Rewrite the trailing comment on each media_id line with nekoBT's title."""
+    path = options.config
+    try:
+        original = path.read_text()
+    except OSError as exc:
+        print(f"error: cannot read {path}: {exc}", file=sys.stderr)
+        return 2
+
+    pattern = re.compile(r"""^(?P<lead>\s*media_id\s*=\s*")(?P<id>[^"]+)(?P<quote>")(?P<rest>.*?)(?P<newline>\n?)$""")
+    lines = original.splitlines(keepends=True)
+    out: list[str] = []
+    annotated = unchanged = failed = 0
+    for line in lines:
+        match = pattern.match(line)
+        if not match:
+            out.append(line)
+            continue
+        while out and out[-1].lstrip().startswith("# nekoBT title:"):
+            out.pop()
+        media_id = match.group("id")
+        try:
+            title = media_title(config.apikey, media_id)
+        except NekobtError as exc:
+            failed += 1
+            LOG.warning("%s: %s", media_id, exc)
+            out.append(line)
+            continue
+        if not title:
+            out.append(line)
+            continue
+        replacement = f'{match.group("lead")}{media_id}"  # {title}'
+        if line.endswith("\n"):
+            replacement += "\n"
+        annotated += 1
+        if replacement == line:
+            unchanged += 1
+        out.append(replacement)
+
+    updated = "".join(out)
+    if updated != original and not options.dry_run:
+        temporary = path.with_name(path.name + ".tmp")
+        try:
+            temporary.write_text(updated)
+            os.replace(temporary, path)
+        except OSError as exc:
+            print(f"error: cannot rewrite {path}: {exc}", file=sys.stderr)
+            temporary.unlink(missing_ok=True)
+            return 2
+
+    verb = "would annotate" if options.dry_run else "annotated"
+    print(f"{verb} {annotated} show(s), {unchanged} already up to date, {failed} failed")
+    return 1 if failed else 0
+
+
 def command_verify(config: Config) -> int:
     failures = 0
     print(f"api key: {config.apikey_source}")
@@ -1269,6 +1324,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     listing = subparsers.add_parser("list", help="print configured shows")
     listing.set_defaults(func=lambda config, options: command_list(config))
+
+    annotate = subparsers.add_parser(
+        "annotate", help="write nekoBT's title next to each media_id as a comment"
+    )
+    annotate.add_argument("--dry-run", action="store_true", help="report without rewriting")
+    annotate.set_defaults(func=command_annotate)
 
     verify = subparsers.add_parser("verify", help="check the API key, nekoBT and the client")
     verify.set_defaults(func=lambda config, options: command_verify(config))
