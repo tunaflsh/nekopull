@@ -10,8 +10,6 @@ Python 3.11+
 
 ## Install
 
-`PKGBUILD` on Arch, or:
-
 ```sh
 python3 -m venv .venv && .venv/bin/pip install .
 ```
