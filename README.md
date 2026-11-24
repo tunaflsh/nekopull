@@ -95,8 +95,8 @@ Any key here can also be set on a single `[[show]]` to override it.
 | `allow_batch` | `false` | accept season batches |
 
 One release is taken per episode. When several match, the order of preference is
-your `groups`, then the highest accepted sub level, then the most seeders. There
-is no minimum-seeder threshold — seeders only break ties.
+your `groups`, then the highest accepted sub level; anything still tied falls
+back to the newest release in the feed.
 
 **Sub levels** describe how much work went into the subtitles:
 

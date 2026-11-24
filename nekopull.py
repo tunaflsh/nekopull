@@ -107,8 +107,6 @@ class Release:
     magnet: str
     infohash: str
     size: int = 0
-    seeders: int = 0
-    peers: int = 0
     level: int | None = None
     resolution: str | None = None
     codec: str | None = None
@@ -156,7 +154,7 @@ def parse_episode(title: str) -> tuple[int, int, bool]:
 
 
 def parse_release(
-    title: str, magnet: str, *, size: int = 0, seeders: int = 0, peers: int = 0
+    title: str, magnet: str, *, size: int = 0
 ) -> Release:
     """Build a :class:`Release` from a feed item title and magnet link."""
     clean, level = strip_tags(title)
@@ -181,8 +179,6 @@ def parse_release(
         magnet=magnet,
         infohash=hash_match.group(1).lower() if hash_match else "",
         size=size,
-        seeders=seeders,
-        peers=peers,
         level=level,
         resolution=resolution.group(1).lower() if resolution else None,
         codec=_CODEC_MAP.get(codec_match.group(1).lower()) if codec_match else None,
@@ -267,8 +263,6 @@ def fetch_releases(apikey: str, media_id: str, *, limit: int = 100) -> list[Rele
                 title,
                 magnet,
                 size=_as_int(attrs.get("size")),
-                seeders=_as_int(attrs.get("seeders")),
-                peers=_as_int(attrs.get("peers")),
             )
         )
     return releases
@@ -797,11 +791,11 @@ def passes_filters(release: Release, settings: Defaults) -> bool:
 
 
 def rank(release: Release, settings: Defaults) -> tuple:
-    """Sort key: preferred group, then highest sub level, then most seeders."""
+    """Sort key: preferred group, then highest sub level."""
     preferred = {group.lower() for group in settings.groups}
     group_rank = 0 if not preferred else (0 if (release.group or "").lower() in preferred else 1)
     level = release.level if release.level is not None else -1
-    return (group_rank, -level, -release.seeders, release.size)
+    return (group_rank, -level)
 
 
 def select(

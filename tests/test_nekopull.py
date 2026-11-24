@@ -148,15 +148,15 @@ class FilterTest(unittest.TestCase):
         self.assertTrue(passes_filters(h264, settings))
 
     def test_prefers_higher_level(self):
-        l0 = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET, seeders=100)
-        l3 = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=1)
+        l0 = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET)
+        l3 = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET)
         settings = Defaults(resolutions=["1080p"])
         self.assertLess(rank(l3, settings), rank(l0, settings))
 
     def test_group_preference_wins_ties(self):
         settings = Defaults(resolutions=["1080p"], groups=["Erai-raws"])
-        other = parse_release("[ToonsHub] Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=50)
-        wanted = parse_release("[Erai-raws] Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=1)
+        other = parse_release("[ToonsHub] Show S01E01 1080p {Tags:L3;}", MAGNET)
+        wanted = parse_release("[Erai-raws] Show S01E01 1080p {Tags:L3;}", MAGNET)
         self.assertLess(rank(wanted, settings), rank(other, settings))
 
 
@@ -164,9 +164,9 @@ class SelectTest(unittest.TestCase):
     def test_one_per_episode_best_wins(self):
         settings = Defaults(resolutions=["1080p"])
         releases = [
-            parse_release("[A] Show S01E01 1080p {Tags:L1;}", MAGNET, seeders=5),
-            parse_release("[B] Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=1),
-            parse_release("[C] Show S01E02 1080p {Tags:L3;}", MAGNET, seeders=9),
+            parse_release("[A] Show S01E01 1080p {Tags:L1;}", MAGNET),
+            parse_release("[B] Show S01E01 1080p {Tags:L3;}", MAGNET),
+            parse_release("[C] Show S01E02 1080p {Tags:L3;}", MAGNET),
         ]
         picks = select(releases, settings)
         self.assertEqual([release.episode for release in picks], [1, 2])
@@ -414,7 +414,6 @@ class FeedParsingTest(unittest.TestCase):
             <item>
               <title>[A] Show S01E03 1080p {Tags:L0;V9;}</title>
               <link>magnet:?xt=urn:btih:aaaabbbbccccddddeeeeffff0000111122223333</link>
-              <torznab:attr name="seeders" value="7"/>
               <torznab:attr name="size" value="1234"/>
             </item>
           </channel>
@@ -427,7 +426,6 @@ class FeedParsingTest(unittest.TestCase):
             nekopull.http_get = original
         self.assertEqual(len(releases), 1)
         self.assertEqual(releases[0].episode, 3)
-        self.assertEqual(releases[0].seeders, 7)
         self.assertEqual(releases[0].size, 1234)
 
 
