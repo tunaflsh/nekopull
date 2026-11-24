@@ -1,0 +1,10 @@
+[Unit]
+Description=nekopull - poll nekoBT by media id
+Documentation=https://github.com/tunaflsh/nekopull
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nekopull run
+# Magnet links go straight to Transmission; nothing is written here.
