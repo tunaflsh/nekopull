@@ -24,7 +24,6 @@ import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,7 +35,6 @@ LOG = logging.getLogger("nekopull")
 JSON_SEARCH_URL = "https://nekobt.to/api/v1/torrents/search"
 MEDIA_SEARCH_URL = "https://nekobt.to/api/v1/media/search"
 USER_AGENT = f"nekopull/{__version__}"
-TORZNAB_NS = {"torznab": "http://torznab.com/schemas/2015/feed"}
 
 CONFIG_PATH = Path(
     os.environ.get(
@@ -377,26 +375,6 @@ def lookup_media(query: str, *, limit: int = 5) -> list[dict]:
     if data.get("error"):
         raise NekobtError(data.get("message", "media search failed"))
     return data.get("data", {}).get("results", [])
-
-
-def _text(item: ET.Element, tag: str) -> str:
-    found = item.find(tag)
-    return (found.text or "").strip() if found is not None else ""
-
-
-def _enclosure_url(item: ET.Element) -> str:
-    for enclosure in item.findall("enclosure"):
-        if "bittorrent" in (enclosure.get("type") or ""):
-            return enclosure.get("url") or ""
-    enclosure = item.find("enclosure")
-    return (enclosure.get("url") or "") if enclosure is not None else ""
-
-
-def _torznab_attrs(item: ET.Element) -> dict[str, str]:
-    return {
-        attr.get("name", ""): attr.get("value", "")
-        for attr in item.findall("torznab:attr", TORZNAB_NS)
-    }
 
 
 def _as_int(value: str | None) -> int:
