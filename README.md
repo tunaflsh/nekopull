@@ -47,7 +47,7 @@ python3 -m venv .venv && .venv/bin/pip install .
 
    `nekopull.service` runs `nekopull daemon`. It resolves the API key and
    client credentials once at start-up and keeps them in memory, then polls
-   every `[daemon] interval` (default `1d`).
+   every `interval` (default `1d`).
 
    It watches `config.toml`: editing the file takes effect at once — a new
    show is polled immediately, filter changes apply to the next poll, and
@@ -65,6 +65,7 @@ Everything except `[[show]]` is optional.
 | --- | --- | --- |
 | `apikey` | — | nekoBT API key; moved to libsecret automatically when available |
 | `state_path` | `~/.local/state/nekopull/state.db` | where grabbed episodes are recorded |
+| `interval` | `1d` | time between daemon polls, e.g. `30m`, `6h`, `1d` |
 
 ### `[[show]]`
 
@@ -133,12 +134,6 @@ filter.
 
 To support another client, implement `version()` and `add(magnet, tags)` in a
 `TorrentClient` subclass and register it in `CLIENTS`; nothing else changes.
-
-### `[daemon]`
-
-| key | default | meaning |
-| --- | --- | --- |
-| `interval` | `1d` | time between polls, e.g. `30m`, `6h`, `1d` |
 
 ### Where credentials live
 

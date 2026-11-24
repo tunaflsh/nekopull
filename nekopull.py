@@ -585,8 +585,7 @@ class Config:
     interval: str = "1d"
 
 
-_TOP_LEVEL_KEYS = {"apikey", "state_path", "defaults", "show", "client", "daemon"}
-_DAEMON_KEYS = {"interval"}
+_TOP_LEVEL_KEYS = {"apikey", "state_path", "interval", "defaults", "show", "client"}
 _SHOW_KEYS = {
     "media_id",
     "begin",
@@ -789,11 +788,7 @@ def load_config(
             " replace them with the stub by hand"
         )
 
-    daemon_raw = raw.get("daemon", {})
-    unknown = set(daemon_raw) - _DAEMON_KEYS
-    if unknown:
-        raise ConfigError(f"{path}: unknown daemon keys: {', '.join(sorted(unknown))}")
-    interval = str(daemon_raw.get("interval", "1d"))
+    interval = str(raw.get("interval", "1d"))
     _parse_interval(interval)  # validated here so a typo fails at load
 
     state_path = Path(raw.get("state_path", path.parent / "state.db"))
@@ -1492,7 +1487,7 @@ def build_parser() -> argparse.ArgumentParser:
     daemon.add_argument(
         "--interval",
         default=None,
-        help="override the [daemon] interval, e.g. 30m, 6h, 1d",
+        help="override the config interval, e.g. 30m, 6h, 1d",
     )
     daemon.add_argument("--dry-run", action="store_true", help="report without adding anything")
     daemon.set_defaults(func=command_daemon)

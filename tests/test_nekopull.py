@@ -940,7 +940,7 @@ class CliTest(unittest.TestCase):
     def test_interval_comes_from_the_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
-                tmp, 'apikey = "k"\n\n[daemon]\ninterval = "6h"\n\n[[show]]\nmedia_id = "s1"\n'
+                tmp, 'apikey = "k"\ninterval = "6h"\n\n[[show]]\nmedia_id = "s1"\n'
             )
             config = load_config(path, migrate=False)
             self.assertEqual(config.interval, "6h")
@@ -950,7 +950,7 @@ class CliTest(unittest.TestCase):
     def test_bad_interval_in_the_config_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
-                tmp, 'apikey = "k"\n\n[daemon]\ninterval = "daily"\n\n[[show]]\nmedia_id = "s1"\n'
+                tmp, 'apikey = "k"\ninterval = "daily"\n\n[[show]]\nmedia_id = "s1"\n'
             )
             with self.assertRaises(ConfigError):
                 load_config(path, migrate=False)
