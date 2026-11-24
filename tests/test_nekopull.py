@@ -10,21 +10,21 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import nekopull  # noqa: E402
 from nekopull import (  # noqa: E402
-    Config,
+    ClientConfig,
+    ClientError,
     ConfigError,
     Defaults,
-    Release,
-    Show,
     State,
     Transmission,
-    TransmissionConfig,
-    TransmissionError,
     load_config,
+    make_client,
     parse_episode,
     parse_release,
     passes_filters,
@@ -34,6 +34,12 @@ from nekopull import (  # noqa: E402
 )
 
 MAGNET = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=x"
+
+
+def write_config(tmp: str, body: str) -> Path:
+    path = Path(tmp) / "config.toml"
+    path.write_text(body)
+    return path
 
 
 class EpisodeParsingTest(unittest.TestCase):
@@ -67,9 +73,7 @@ class EpisodeParsingTest(unittest.TestCase):
 
 class TagParsingTest(unittest.TestCase):
     def test_level_extracted(self):
-        clean, level = strip_tags(
-            "Show - 08 [1080p] {Tags:L2;V9;C1;A=ja;S=en;}"
-        )
+        clean, level = strip_tags("Show - 08 [1080p] {Tags:L2;V9;C1;A=ja;S=en;}")
         self.assertEqual(level, 2)
         self.assertEqual(clean, "Show - 08 [1080p]")
 
@@ -93,47 +97,61 @@ class TagParsingTest(unittest.TestCase):
         self.assertFalse(release.proper)
 
     def test_group_suffix_and_batch(self):
-        release = parse_release(
-            "[ToonsHub] Show S01 [1080p] (Batch) {Tags:L1;V9;C1;}", MAGNET
-        )
+        release = parse_release("[ToonsHub] Show S01 [1080p] (Batch) {Tags:L1;V9;C1;}", MAGNET)
         self.assertTrue(release.batch)
         self.assertEqual(release.group, "ToonsHub")
 
 
 class FilterTest(unittest.TestCase):
     def setUp(self):
-        self.settings = Defaults(max_level=1, resolutions=["1080p"], min_seeders=0)
+        self.settings = Defaults(levels=[3], resolutions=["1080p"])
 
-    def test_level_and_resolution(self):
-        good = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET)
-        hd = parse_release("Show S01E01 720p {Tags:L0;}", MAGNET)
-        bad_level = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET)
-        self.assertTrue(passes_filters(good, self.settings))
+    def test_level_must_be_accepted(self):
+        official = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET)
+        fansub = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET)
+        self.assertFalse(passes_filters(official, self.settings))
+        self.assertTrue(passes_filters(fansub, self.settings))
+
+    def test_no_level_filter_accepts_everything(self):
+        settings = Defaults(resolutions=["1080p"])
+        official = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET)
+        self.assertTrue(passes_filters(official, settings))
+
+    def test_untagged_release_rejected_when_levels_set(self):
+        untagged = parse_release("Show S01E01 1080p", MAGNET)
+        self.assertFalse(passes_filters(untagged, self.settings))
+
+    def test_resolution(self):
+        hd = parse_release("Show S01E01 720p {Tags:L3;}", MAGNET)
         self.assertFalse(passes_filters(hd, self.settings))
-        self.assertFalse(passes_filters(bad_level, self.settings))
+
+    def test_batch(self):
+        batch = parse_release("Show S01 Batch 1080p {Tags:L3;}", MAGNET)
+        self.assertFalse(passes_filters(batch, self.settings))
+        relaxed = Defaults(resolutions=["1080p"], allow_batch=True)
+        self.assertTrue(passes_filters(batch, relaxed))
+
+    def test_v2_is_accepted(self):
+        proper = parse_release("Show S01E01v2 1080p {Tags:L3;}", MAGNET)
+        self.assertTrue(passes_filters(proper, self.settings))
 
     def test_min_seeders(self):
         strict = Defaults(resolutions=["1080p"], min_seeders=10)
-        quiet = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET, seeders=2)
-        busy = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET, seeders=40)
+        quiet = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=2)
+        busy = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=40)
         self.assertFalse(passes_filters(quiet, strict))
         self.assertTrue(passes_filters(busy, strict))
 
-    def test_batch_and_proper(self):
-        batch = parse_release("Show S01 Batch 1080p {Tags:L0;}", MAGNET)
-        proper = parse_release("Show S01E01v2 1080p {Tags:L0;}", MAGNET)
-        self.assertFalse(passes_filters(batch, self.settings))
-        self.assertFalse(passes_filters(proper, self.settings))
-
-    def test_prefers_lower_level(self):
-        l1 = parse_release("Show S01E01 1080p {Tags:L1;}", MAGNET, seeders=100)
-        l0 = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET, seeders=1)
-        self.assertGreater(rank(l1, self.settings), rank(l0, self.settings))
+    def test_prefers_higher_level(self):
+        l0 = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET, seeders=100)
+        l3 = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=1)
+        settings = Defaults(resolutions=["1080p"])
+        self.assertLess(rank(l3, settings), rank(l0, settings))
 
     def test_group_preference_wins_ties(self):
         settings = Defaults(resolutions=["1080p"], groups=["Erai-raws"])
-        other = parse_release("[ToonsHub] Show S01E01 1080p {Tags:L0;}", MAGNET, seeders=50)
-        wanted = parse_release("[Erai-raws] Show S01E01 1080p {Tags:L0;}", MAGNET, seeders=1)
+        other = parse_release("[ToonsHub] Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=50)
+        wanted = parse_release("[Erai-raws] Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=1)
         self.assertLess(rank(wanted, settings), rank(other, settings))
 
 
@@ -142,72 +160,123 @@ class SelectTest(unittest.TestCase):
         settings = Defaults(resolutions=["1080p"])
         releases = [
             parse_release("[A] Show S01E01 1080p {Tags:L1;}", MAGNET, seeders=5),
-            parse_release("[B] Show S01E01 1080p {Tags:L0;}", MAGNET, seeders=1),
-            parse_release("[C] Show S01E02 1080p {Tags:L0;}", MAGNET, seeders=9),
+            parse_release("[B] Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=1),
+            parse_release("[C] Show S01E02 1080p {Tags:L3;}", MAGNET, seeders=9),
         ]
         picks = select(releases, settings)
-        self.assertEqual(len(picks), 2)
         self.assertEqual([release.episode for release in picks], [1, 2])
         self.assertEqual(picks[0].group, "B")
 
     def test_unparsed_episodes_dropped(self):
         settings = Defaults(resolutions=["1080p"])
-        picks = select([parse_release("Show 1080p {Tags:L0;}", MAGNET)], settings)
-        self.assertEqual(picks, [])
+        self.assertEqual(select([parse_release("Show 1080p {Tags:L3;}", MAGNET)], settings), [])
 
     def test_state_skips_known_episode(self):
         settings = Defaults(resolutions=["1080p"])
         with tempfile.TemporaryDirectory() as tmp:
             state = State(Path(tmp) / "state.db")
-            release = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET)
+            release = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET)
             self.assertEqual(len(select([release], settings, media_id="s1", state=state)), 1)
             state.record("s1", release)
             self.assertEqual(select([release], settings, media_id="s1", state=state), [])
             self.assertTrue(state.has_release(release.infohash))
-            info = State(Path(tmp) / "state.db")
-            self.assertTrue(info.has_episode("s1", 1, 1))
-            info.close()
+            reopened = State(Path(tmp) / "state.db")
+            self.assertTrue(reopened.has_episode("s1", 1, 1))
+            reopened.close()
             state.close()
 
 
 class ConfigTest(unittest.TestCase):
-    def _write(self, tmp: str, body: str) -> Path:
-        path = Path(tmp) / "config.toml"
-        path.write_text(body)
-        return path
-
     def test_minimal(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = self._write(
-                tmp,
-                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nname = "one"\n',
-            )
+            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nname = "one"\n')
             config = load_config(path)
             self.assertEqual(config.apikey, "k")
+            self.assertEqual(config.apikey_source, "config file")
             self.assertEqual(config.shows[0].media_id, "s1")
+            self.assertEqual(config.client.type, "transmission")
             self.assertEqual(config.state_path, path.parent / "state.db")
 
-    def test_show_overrides_merge(self):
+    def test_show_override_merge(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = self._write(
+            path = write_config(
                 tmp,
-                'apikey = "k"\n\n[defaults]\nmax_level = 2\n\n'
-                '[[show]]\nmedia_id = "s1"\nmax_level = 0\n',
+                'apikey = "k"\n\n[defaults]\nlevels = [3]\n\n'
+                '[[show]]\nmedia_id = "s1"\nlevels = [0, 1]\n',
             )
             config = load_config(path)
             merged = config.defaults.merged(config.shows[0].overrides())
-            self.assertEqual(merged.max_level, 0)
+            self.assertEqual(merged.levels, [0, 1])
             self.assertEqual(merged.resolutions, ["1080p"])
 
-    def test_missing_apikey(self):
+    def test_client_section(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = self._write(tmp, '[[show]]\nmedia_id = "s1"\n')
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[client]\ntype = "transmission"\n'
+                'url = "http://box:9091/transmission/rpc"\ndownload_dir = "/tv"\n\n'
+                '[[show]]\nmedia_id = "s1"\n',
+            )
+            config = load_config(path)
+            self.assertEqual(config.client.url, "http://box:9091/transmission/rpc")
+            self.assertEqual(config.client.download_dir, "/tv")
+
+    def test_unknown_client(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[client]\ntype = "deluge"\n\n[[show]]\nmedia_id = "s1"\n',
+            )
             with self.assertRaises(ConfigError):
                 load_config(path)
 
-    def test_unknown_key(self):
+    def test_missing_key_and_no_provider(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = self._write(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ntitle = "x"\n')
+            path = write_config(tmp, '[[show]]\nmedia_id = "s1"\n')
+            with self.assertRaises(ConfigError):
+                load_config(path)
+
+    def test_unknown_show_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ntitle = "x"\n')
+            with self.assertRaises(ConfigError):
+                load_config(path)
+
+    def test_libsecret_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                '[secrets]\nprovider = "libsecret"\nservice = "nekopull"\n\n'
+                '[[show]]\nmedia_id = "s1"\n',
+            )
+            with mock.patch("nekopull.shutil.which", return_value="/usr/bin/secret-tool"), \
+                    mock.patch(
+                        "nekopull.subprocess.run",
+                        return_value=SimpleNamespace(returncode=0, stdout="SECRET\n"),
+                    ) as run:
+                config = load_config(path)
+            self.assertEqual(config.apikey, "SECRET")
+            self.assertIn("libsecret", config.apikey_source)
+            self.assertEqual(run.call_args.args[0][:2], ["secret-tool", "lookup"])
+
+    def test_libsecret_missing_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, '[secrets]\nprovider = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n'
+            )
+            with mock.patch("nekopull.shutil.which", return_value="/usr/bin/secret-tool"), \
+                    mock.patch(
+                        "nekopull.subprocess.run",
+                        return_value=SimpleNamespace(returncode=1, stdout=""),
+                    ):
+                with self.assertRaises(ConfigError):
+                    load_config(path)
+
+    def test_unknown_secrets_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, '[secrets]\nprovider = "pass"\n\n[[show]]\nmedia_id = "s1"\n'
+            )
             with self.assertRaises(ConfigError):
                 load_config(path)
 
@@ -271,7 +340,7 @@ class TransmissionTest(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         port = self.server.server_address[1]
-        self.config = TransmissionConfig(url=f"http://127.0.0.1:{port}/transmission/rpc")
+        self.config = ClientConfig(url=f"http://127.0.0.1:{port}/transmission/rpc")
 
     def tearDown(self):
         self.server.shutdown()
@@ -280,12 +349,22 @@ class TransmissionTest(unittest.TestCase):
     def test_session_handshake_and_add(self):
         client = Transmission(self.config)
         self.assertEqual(client.version(), "4.0.6")
-        self.assertEqual(client.add(MAGNET), "added")
+        self.assertEqual(client.add(MAGNET, tags=["show"]), "added")
 
     def test_unreachable(self):
-        client = Transmission(TransmissionConfig(url="http://127.0.0.1:1/transmission/rpc"))
-        with self.assertRaises(TransmissionError):
+        client = Transmission(ClientConfig(url="http://127.0.0.1:1/transmission/rpc"))
+        with self.assertRaises(ClientError):
             client.version()
+
+
+class ClientRegistryTest(unittest.TestCase):
+    def test_transmission_is_registered(self):
+        client = make_client(ClientConfig())
+        self.assertIsInstance(client, Transmission)
+
+    def test_unknown_backend(self):
+        with self.assertRaises(ConfigError):
+            make_client(ClientConfig(type="rtorrent"))
 
 
 if __name__ == "__main__":

@@ -1,24 +1,37 @@
-# Copy to ~/.config/nekopull/config.toml and fill in the key.
-apikey = "YOUR-API-KEY"
+# Copy to ~/.config/nekopull/config.toml
 
+# API key, either inline:
+apikey = "YOUR-API-KEY"
+# ...or omit it and read it from libsecret instead (see below).
+
+# Sub levels to accept: 0 official, 1 lightly edited official, 2 small fansubs,
+# 3 full fansubs. Empty list = any level; the highest accepted level wins.
 [defaults]
-# nekoBT sub level: 0 = official subs only, 1 = light edits, 2/3 = fansubs.
-# Set max_level = 0 to take only untouched official subs; null disables it.
-max_level = 1
+levels = [2, 3]
 resolutions = ["1080p"]
 min_seeders = 0
 allow_batch = false
-allow_v2 = false
-groups = []            # preferred release groups, e.g. ["erai-raws"]
+# groups = ["erai-raws"]   # preference only, never a filter
 
-[transmission]
+[client]
+type = "transmission"
 url = "http://127.0.0.1:9091/transmission/rpc"
 username = ""
 password = ""
 download_dir = "/data/torrents/anime"
 
-# One block per show. Look the id up with:
-#   nekopull lookup towa\ no\ yuugure
+# Keep the key in the Secret Service instead of this file:
+#
+#   secret-tool store --label='nekopull API key' service nekopull username api
+#
+# then delete the `apikey` line above and uncomment:
+#
+# [secrets]
+# provider = "libsecret"
+# service = "nekopull"
+# username = "api"
+
+# One block per show; find ids with `nekopull lookup "title"`.
 [[show]]
 media_id = "s1539"
 name = "towa no yuugure"
@@ -26,4 +39,4 @@ name = "towa no yuugure"
 [[show]]
 media_id = "s4147"
 name = "enen no shouboutai"
-max_level = 0
+levels = [0, 1]

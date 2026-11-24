@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Poll nekoBT by media id and hand new episodes to Transmission.
+"""Watch nekoBT for new episodes of the shows you follow.
 
-Every query is scoped by ``media_id``, so release titles are never used to work
-out *which show* an entry belongs to. Titles are only parsed for the episode
-number, resolution, codec and nekoBT's ``{Tags:...}`` block, all of which are
-properties of a single release.
+Each configured show is polled by its nekoBT media id, so a feed only ever
+contains that one show. Release titles are parsed for the episode number,
+resolution, codec and nekoBT's ``{Tags:Ln;...}`` sub level; nothing else about
+them is trusted or needed.
 """
 
 from __future__ import annotations
@@ -15,7 +15,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 import tomllib
@@ -32,6 +34,7 @@ __version__ = "0.1.0"
 LOG = logging.getLogger("nekopull")
 
 TORZNAB_URL = "https://nekobt.to/api/torznab/api"
+CAPS_URL = f"{TORZNAB_URL}?t=caps"
 MEDIA_SEARCH_URL = "https://nekobt.to/api/v1/media/search"
 USER_AGENT = f"nekopull/{__version__}"
 TORZNAB_NS = {"torznab": "http://torznab.com/schemas/2015/feed"}
@@ -152,7 +155,9 @@ def parse_episode(title: str) -> tuple[int, int, bool]:
     return 0, 0, False
 
 
-def parse_release(title: str, magnet: str, *, size: int = 0, seeders: int = 0, peers: int = 0) -> Release:
+def parse_release(
+    title: str, magnet: str, *, size: int = 0, seeders: int = 0, peers: int = 0
+) -> Release:
     """Build a :class:`Release` from a feed item title and magnet link."""
     clean, level = strip_tags(title)
     season, episode, proper = parse_episode(clean)
@@ -318,20 +323,18 @@ class ConfigError(RuntimeError):
 
 @dataclass(slots=True)
 class Defaults:
-    max_level: int | None = 1
+    levels: list[int] = field(default_factory=list)
     resolutions: list[str] = field(default_factory=lambda: ["1080p"])
     min_seeders: int = 0
     allow_batch: bool = False
-    allow_v2: bool = False
     groups: list[str] = field(default_factory=list)
 
     def merged(self, overrides: dict) -> Defaults:
         data = {
-            "max_level": self.max_level,
+            "levels": list(self.levels),
             "resolutions": list(self.resolutions),
             "min_seeders": self.min_seeders,
             "allow_batch": self.allow_batch,
-            "allow_v2": self.allow_v2,
             "groups": list(self.groups),
         }
         for key, value in overrides.items():
@@ -344,7 +347,7 @@ class Defaults:
 class Show:
     media_id: str
     name: str
-    max_level: int | None = None
+    levels: list[int] | None = None
     resolutions: list[str] | None = None
     groups: list[str] | None = None
     allow_batch: bool | None = None
@@ -352,7 +355,7 @@ class Show:
 
     def overrides(self) -> dict:
         return {
-            "max_level": self.max_level,
+            "levels": None if self.levels is None else list(self.levels),
             "resolutions": None if self.resolutions is None else list(self.resolutions),
             "min_seeders": self.min_seeders,
             "allow_batch": self.allow_batch,
@@ -360,33 +363,47 @@ class Show:
         }
 
 
+DEFAULT_CLIENT_TYPE = "transmission"
+DEFAULT_CLIENT_URL = "http://127.0.0.1:9091/transmission/rpc"
+DEFAULT_SECRET_SERVICE = "nekopull"
+DEFAULT_SECRET_USERNAME = "api"
+
+
 @dataclass(slots=True)
-class TransmissionConfig:
-    url: str = "http://127.0.0.1:9091/transmission/rpc"
+class ClientConfig:
+    """Connection settings handed to a torrent client backend."""
+
+    type: str = DEFAULT_CLIENT_TYPE
+    url: str = DEFAULT_CLIENT_URL
     username: str = ""
     password: str = ""
     download_dir: str | None = None
 
 
 @dataclass(slots=True)
+class SecretsConfig:
+    """Where to read the API key from when it is not in the config file."""
+
+    provider: str | None = None
+    service: str = DEFAULT_SECRET_SERVICE
+    username: str = DEFAULT_SECRET_USERNAME
+
+
+@dataclass(slots=True)
 class Config:
     apikey: str
+    apikey_source: str
     defaults: Defaults
     shows: list[Show]
-    transmission: TransmissionConfig = field(default_factory=TransmissionConfig)
+    client: ClientConfig = field(default_factory=ClientConfig)
     state_path: Path = STATE_PATH
 
 
-_SHOW_KEYS = {
-    "media_id",
-    "name",
-    "max_level",
-    "resolutions",
-    "groups",
-    "allow_batch",
-    "min_seeders",
-}
-_DEFAULT_KEYS = {"max_level", "resolutions", "min_seeders", "allow_batch", "allow_v2", "groups"}
+_SHOW_KEYS = {"media_id", "name", "levels", "resolutions", "groups", "allow_batch", "min_seeders"}
+_DEFAULT_KEYS = {"levels", "resolutions", "min_seeders", "allow_batch", "groups"}
+_CLIENT_KEYS = {"type", "url", "username", "password", "download_dir"}
+_SECRETS_KEYS = {"provider", "service", "username"}
+_SECRET_PROVIDERS = {"libsecret"}
 
 
 def load_config(path: Path | str = CONFIG_PATH) -> Config:
@@ -399,9 +416,7 @@ def load_config(path: Path | str = CONFIG_PATH) -> Config:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path}: {exc}") from None
 
-    apikey = raw.get("apikey")
-    if not apikey:
-        raise ConfigError(f"{path}: `apikey` is required")
+    apikey, apikey_source = _resolve_apikey(path, raw)
 
     defaults = Defaults()
     for key, value in raw.get("defaults", {}).items():
@@ -413,7 +428,9 @@ def load_config(path: Path | str = CONFIG_PATH) -> Config:
     for index, entry in enumerate(raw.get("show", []), start=1):
         unknown = set(entry) - _SHOW_KEYS
         if unknown:
-            raise ConfigError(f"{path}: show #{index} has unknown keys: {', '.join(sorted(unknown))}")
+            raise ConfigError(
+                f"{path}: show #{index} has unknown keys: {', '.join(sorted(unknown))}"
+            )
         media_id = entry.get("media_id")
         if not media_id:
             raise ConfigError(f"{path}: show #{index} is missing `media_id`")
@@ -421,7 +438,7 @@ def load_config(path: Path | str = CONFIG_PATH) -> Config:
             Show(
                 media_id=str(media_id),
                 name=str(entry.get("name", media_id)),
-                max_level=entry.get("max_level"),
+                levels=entry.get("levels"),
                 resolutions=entry.get("resolutions"),
                 groups=entry.get("groups"),
                 allow_batch=entry.get("allow_batch"),
@@ -431,15 +448,73 @@ def load_config(path: Path | str = CONFIG_PATH) -> Config:
     if not shows:
         raise ConfigError(f"{path}: no [[show]] entries")
 
-    tx = raw.get("transmission", {})
-    transmission = TransmissionConfig(
-        url=tx.get("url", TransmissionConfig.url),
-        username=tx.get("username", ""),
-        password=tx.get("password", ""),
-        download_dir=tx.get("download_dir"),
+    client_raw = raw.get("client", {})
+    unknown = set(client_raw) - _CLIENT_KEYS
+    if unknown:
+        raise ConfigError(f"{path}: unknown client keys: {', '.join(sorted(unknown))}")
+    client = ClientConfig(
+        type=client_raw.get("type", DEFAULT_CLIENT_TYPE),
+        url=client_raw.get("url", DEFAULT_CLIENT_URL),
+        username=client_raw.get("username", ""),
+        password=client_raw.get("password", ""),
+        download_dir=client_raw.get("download_dir"),
     )
+    if client.type not in CLIENTS:
+        raise ConfigError(
+            f"{path}: unsupported client `{client.type}` (known: {', '.join(sorted(CLIENTS))})"
+        )
+
     state_path = Path(raw.get("state_path", path.parent / "state.db"))
-    return Config(str(apikey), defaults, shows, transmission, state_path)
+    return Config(apikey, apikey_source, defaults, shows, client, state_path)
+
+
+def _resolve_apikey(path: Path, raw: dict) -> tuple[str, str]:
+    inline = raw.get("apikey")
+    secrets_raw = raw.get("secrets", {})
+    unknown = set(secrets_raw) - _SECRETS_KEYS
+    if unknown:
+        raise ConfigError(f"{path}: unknown secrets keys: {', '.join(sorted(unknown))}")
+
+    if inline:
+        return str(inline), "config file"
+
+    secrets = SecretsConfig(
+        provider=secrets_raw.get("provider"),
+        service=secrets_raw.get("service", DEFAULT_SECRET_SERVICE),
+        username=secrets_raw.get("username", DEFAULT_SECRET_USERNAME),
+    )
+    if not secrets.provider:
+        raise ConfigError(
+            f"{path}: `apikey` is missing and no [secrets] provider is configured"
+        )
+    if secrets.provider not in _SECRET_PROVIDERS:
+        raise ConfigError(
+            f"{path}: unsupported secrets provider `{secrets.provider}`"
+            f" (known: {', '.join(sorted(_SECRET_PROVIDERS))})"
+        )
+    return read_libsecret(secrets.service, secrets.username), f"libsecret ({secrets.service})"
+
+
+def read_libsecret(service: str, username: str) -> str:
+    """Read a stored secret through libsecret's `secret-tool`."""
+    if shutil.which("secret-tool") is None:
+        raise ConfigError("secret-tool not found; install libsecret to use [secrets]")
+    try:
+        result = subprocess.run(
+            ["secret-tool", "lookup", "service", service, "username", username],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ConfigError(f"cannot query libsecret: {exc}") from exc
+    value = result.stdout.strip()
+    if result.returncode != 0 or not value:
+        raise ConfigError(
+            "no API key in libsecret; store it with:\n"
+            f"  secret-tool store --label='nekopull API key' service {service} username {username}"
+        )
+    return value
 
 
 # --- state -----------------------------------------------------------------
@@ -509,20 +584,38 @@ class State:
         self._connection.commit()
 
 
-# --- transmission ----------------------------------------------------------
+# --- torrent clients -------------------------------------------------------
 
 
-class TransmissionError(RuntimeError):
-    """Raised when Transmission cannot be reached or rejects a request."""
+class ClientError(RuntimeError):
+    """Raised when the torrent client cannot be reached or refuses a request."""
 
 
-class Transmission:
-    """Minimal Transmission RPC client (session id handshake included)."""
+class TorrentClient:
+    """Backend interface every client implements."""
 
-    def __init__(self, config: TransmissionConfig, *, timeout: float = 30.0):
+    name = "base"
+
+    def __init__(self, config: ClientConfig, *, timeout: float = 30.0):
         self.url = config.url
         self.download_dir = config.download_dir
         self.timeout = timeout
+
+    def version(self) -> str:
+        raise NotImplementedError
+
+    def add(self, magnet: str, tags: list[str] | None = None) -> str:
+        """Add a magnet link; return ``added``, ``duplicate`` or ``error``."""
+        raise NotImplementedError
+
+
+class Transmission(TorrentClient):
+    """Transmission RPC backend (session id handshake included)."""
+
+    name = "transmission"
+
+    def __init__(self, config: ClientConfig, *, timeout: float = 30.0):
+        super().__init__(config, timeout=timeout)
         self.session_id: str | None = None
         self._authorization = ""
         if config.username:
@@ -550,30 +643,29 @@ class Transmission:
                     self.session_id = exc.headers.get("X-Transmission-Session-Id")
                     exc.close()
                     if not self.session_id:
-                        raise TransmissionError("Transmission did not send a session id") from exc
+                        raise ClientError("Transmission did not send a session id") from exc
                     continue
-                raise TransmissionError(f"Transmission HTTP {exc.code}") from exc
+                raise ClientError(f"Transmission HTTP {exc.code}") from exc
             except urllib.error.URLError as exc:
-                raise TransmissionError(f"cannot reach Transmission: {exc.reason}") from exc
+                raise ClientError(f"cannot reach Transmission: {exc.reason}") from exc
             try:
                 answer = json.loads(body)
             except json.JSONDecodeError as exc:
-                raise TransmissionError(f"unparseable Transmission response: {exc}") from exc
+                raise ClientError(f"unparseable Transmission response: {exc}") from exc
             if answer.get("result") != "success":
-                raise TransmissionError(f"Transmission refused {method}: {answer.get('result')}")
+                raise ClientError(f"Transmission refused {method}: {answer.get('result')}")
             return answer.get("arguments", {})
-        raise TransmissionError("Transmission session handshake failed")
+        raise ClientError("Transmission session handshake failed")
 
     def version(self) -> str:
         return self._call("session-get").get("version", "unknown")
 
-    def add(self, magnet: str, *, labels: list[str] | None = None) -> str:
-        """Add a magnet link; return ``added``, ``duplicate`` or ``error``."""
+    def add(self, magnet: str, tags: list[str] | None = None) -> str:
         arguments: dict = {"filename": magnet}
         if self.download_dir:
             arguments["download-dir"] = self.download_dir
-        if labels:
-            arguments["labels"] = labels
+        if tags:
+            arguments["labels"] = tags
         answer = self._call("torrent-add", arguments)
         if "torrent-added" in answer:
             return "added"
@@ -582,33 +674,39 @@ class Transmission:
         return "error"
 
 
+CLIENTS: dict[str, type[TorrentClient]] = {Transmission.name: Transmission}
+
+
+def make_client(config: ClientConfig) -> TorrentClient:
+    backend = CLIENTS.get(config.type)
+    if backend is None:
+        raise ConfigError(
+            f"unsupported client `{config.type}` (known: {', '.join(sorted(CLIENTS))})"
+        )
+    return backend(config)
+
+
 # --- selection -------------------------------------------------------------
 
 
 def passes_filters(release: Release, settings: Defaults) -> bool:
     if not settings.allow_batch and release.batch:
         return False
-    if not settings.allow_v2 and release.proper:
-        return False
     if settings.resolutions and release.resolution not in settings.resolutions:
         return False
-    if settings.max_level is not None and release.level is not None:
-        if release.level > settings.max_level:
-            return False
+    if settings.levels and release.level not in settings.levels:
+        return False
     if release.seeders < settings.min_seeders:
         return False
     return True
 
 
 def rank(release: Release, settings: Defaults) -> tuple:
+    """Sort key: preferred group, then highest sub level, then most seeders."""
     preferred = {group.lower() for group in settings.groups}
     group_rank = 0 if not preferred else (0 if (release.group or "").lower() in preferred else 1)
-    return (
-        group_rank,
-        release.level if release.level is not None else 99,
-        -release.seeders,
-        release.size,
-    )
+    level = release.level if release.level is not None else -1
+    return (group_rank, -level, -release.seeders, release.size)
 
 
 def select(
@@ -629,9 +727,8 @@ def select(
 
     chosen: list[Release] = []
     for key in sorted(candidates):
-        if state is not None and media_id:
-            if state.has_episode(media_id, key[0], key[1]):
-                continue
+        if state is not None and media_id and state.has_episode(media_id, key[0], key[1]):
+            continue
         best = min(candidates[key], key=lambda release: rank(release, settings))
         if state is not None and state.has_release(best.infohash):
             continue
@@ -643,11 +740,11 @@ def select(
 
 
 def command_run(config: Config, options: argparse.Namespace) -> int:
-    selected = private_select_shows(config, options.show)
+    selected = _select_shows(config, options.show)
     failures = 0
     added = 0
     with State(config.state_path) as state:
-        client = None if options.dry_run else Transmission(config.transmission)
+        client = None if options.dry_run else make_client(config.client)
         for show in selected:
             settings = config.defaults.merged(show.overrides())
             try:
@@ -657,9 +754,7 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                 failures += 1
                 continue
             picks = select(releases, settings, media_id=show.media_id, state=state)
-            LOG.info(
-                "%s: %d releases, %d new episode(s)", show.name, len(releases), len(picks)
-            )
+            LOG.info("%s: %d releases, %d new episode(s)", show.name, len(releases), len(picks))
             for release in picks:
                 description = (
                     f"{show.name} S{release.season:02d}E{release.episode:02d}"
@@ -673,8 +768,8 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                     continue
                 assert client is not None
                 try:
-                    result = client.add(release.magnet, labels=[show.name])
-                except TransmissionError as exc:
+                    result = client.add(release.magnet, tags=[show.name])
+                except ClientError as exc:
                     LOG.error("%s: %s", show.name, exc)
                     failures += 1
                     break
@@ -686,7 +781,7 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
-def private_select_shows(config: Config, wanted: list[str] | None) -> list[Show]:
+def _select_shows(config: Config, wanted: list[str] | None) -> list[Show]:
     if not wanted:
         return config.shows
     lookup = {show.name.lower(): show for show in config.shows}
@@ -707,37 +802,50 @@ def command_lookup(options: argparse.Namespace) -> int:
         return 1
     for result in results:
         print(
-            f"{result.get('id', '?'):>8}  {result.get('year', '????')}"
-            f"  {result.get('title', '')}"
+            f"{result.get('id', '?'):>8}  {result.get('year', '????')}  {result.get('title', '')}"
         )
     return 0
 
 
 def command_list(config: Config) -> int:
     for show in config.shows:
-        overrides = {
-            key: value for key, value in show.overrides().items() if value is not None
-        }
+        overrides = {key: value for key, value in show.overrides().items() if value is not None}
         extra = " ".join(f"{key}={value}" for key, value in overrides.items())
         print(f"{show.media_id:>10}  {show.name}" + (f"  ({extra})" if extra else ""))
     return 0
 
 
 def command_verify(config: Config) -> int:
+    failures = 0
+    print(f"api key: {config.apikey_source}")
     try:
-        version = Transmission(config.transmission).version()
-    except TransmissionError as exc:
-        print(f"transmission: {exc}", file=sys.stderr)
-        return 1
-    print(f"transmission: OK (version {version})")
-    print(f"api key: {'set' if config.apikey else 'missing'}")
+        http_get(CAPS_URL)
+    except NekobtError as exc:
+        print(f"nekoBT: {exc}", file=sys.stderr)
+        failures += 1
+    else:
+        print("nekoBT: reachable")
+        try:
+            releases = fetch_releases(config.apikey, config.shows[0].media_id, limit=1)
+        except NekobtError as exc:
+            print(f"api key: rejected ({exc})", file=sys.stderr)
+            failures += 1
+        else:
+            print(f"api key: works ({len(releases)} release(s) for {config.shows[0].name})")
+    try:
+        version = make_client(config.client).version()
+    except ClientError as exc:
+        print(f"{config.client.type}: {exc}", file=sys.stderr)
+        failures += 1
+    else:
+        print(f"{config.client.type}: OK (version {version})")
     print(f"shows: {len(config.shows)}")
-    return 0
+    return 1 if failures else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="nekopull", description="Poll nekoBT by media id and feed Transmission."
+        prog="nekopull", description="Watch nekoBT for new episodes of the shows you follow."
     )
     parser.add_argument("--config", type=Path, default=CONFIG_PATH, help="path to config.toml")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -746,12 +854,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = subparsers.add_parser("run", help="poll every configured show")
     run.add_argument("--dry-run", action="store_true", help="report without adding anything")
-    run.add_argument(
-        "--show", action="append", metavar="NAME", help="only this show (repeatable)"
-    )
-    run.set_defaults(func=lambda config, options: command_run(config, options))
+    run.add_argument("--show", action="append", metavar="NAME", help="only this show (repeatable)")
+    run.set_defaults(func=command_run)
 
-    lookup = subparsers.add_parser("lookup", help="resolve a title to media ids")
+    lookup = subparsers.add_parser("lookup", help="resolve a title to show ids")
     lookup.add_argument("query")
     lookup.add_argument("--limit", type=int, default=5)
     lookup.set_defaults(func=lambda config, options: command_lookup(options))
@@ -759,7 +865,7 @@ def build_parser() -> argparse.ArgumentParser:
     listing = subparsers.add_parser("list", help="print configured shows")
     listing.set_defaults(func=lambda config, options: command_list(config))
 
-    verify = subparsers.add_parser("verify", help="check Transmission and config")
+    verify = subparsers.add_parser("verify", help="check the API key, nekoBT and the client")
     verify.set_defaults(func=lambda config, options: command_verify(config))
     return parser
 
@@ -776,7 +882,7 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(options.config)
     except ConfigError as exc:
         if options.command == "lookup":
-            config = None  # lookup needs no config
+            config = None  # lookup talks to nekoBT's public search only
         else:
             print(f"error: {exc}", file=sys.stderr)
             return 2
