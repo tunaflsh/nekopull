@@ -834,16 +834,29 @@ class CommandsTest(unittest.TestCase):
             with State(config.state_path) as state:
                 self.assertFalse(state.has_episode("s1", 1, 1))
 
+    def test_verify_rejects_a_bad_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config(tmp)
+            client = SimpleNamespace(version=lambda: "4.0.6")
+            with mock.patch("nekopull.fetch_releases", return_value=[]), \
+                    mock.patch("nekopull.make_client", return_value=client), \
+                    mock.patch("nekopull.api_key_valid", return_value=False), \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(nekopull.command_verify(config), 1)
+
     def test_verify_reports_failures(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = self._config(tmp)
             client = SimpleNamespace(version=lambda: "4.0.6")
             with mock.patch("nekopull.fetch_releases", return_value=[]), \
                     mock.patch("nekopull.make_client", return_value=client), \
+                    mock.patch("nekopull.api_key_valid", return_value=True), \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(nekopull.command_verify(config), 0)
             with mock.patch("nekopull.fetch_releases", side_effect=nekopull.NekobtError("down")), \
                     mock.patch("nekopull.make_client", return_value=client), \
+                    mock.patch("nekopull.api_key_valid", return_value=True), \
                     contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(nekopull.command_verify(config), 1)
@@ -923,6 +936,24 @@ class CliTest(unittest.TestCase):
                 code = nekopull.command_annotate(load_config(path, migrate=False), options)
             self.assertEqual(code, 1)
             self.assertIn('media_id = "s1"', path.read_text())
+
+    def test_interval_comes_from_the_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "k"\n\n[daemon]\ninterval = "6h"\n\n[[show]]\nmedia_id = "s1"\n'
+            )
+            config = load_config(path, migrate=False)
+            self.assertEqual(config.interval, "6h")
+            self.assertEqual(nekopull._daemon_interval(config, SimpleNamespace(interval=None)), 21600)
+            self.assertEqual(nekopull._daemon_interval(config, SimpleNamespace(interval="30m")), 1800)
+
+    def test_bad_interval_in_the_config_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "k"\n\n[daemon]\ninterval = "daily"\n\n[[show]]\nmedia_id = "s1"\n'
+            )
+            with self.assertRaises(ConfigError):
+                load_config(path, migrate=False)
 
     def test_interval_parsing(self):
         self.assertEqual(nekopull._parse_interval("1d"), 86400)

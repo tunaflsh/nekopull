@@ -15,6 +15,9 @@ batch = false
 private_magnet = true    # private magnet carries your passkey; false = public
 groups = ["erai-raws"]   # preference only, never a filter
 
+[daemon]
+interval = "1d"          # time between polls, e.g. 30m, 6h, 1d
+
 [client]
 type = "transmission"
 url = "http://127.0.0.1:9091/transmission/rpc"

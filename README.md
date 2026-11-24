@@ -37,70 +37,25 @@ python3 -m venv .venv && .venv/bin/pip install .
    media_id = "s1539"  # Dusk Beyond the End of the World
    ```
 
-3. Check it, then commit:
+3. Check it, then start the service:
 
    ```sh
    nekopull verify
    nekopull run --dry-run
-   nekopull run
+   systemctl --user enable --now nekopull.service
    ```
 
-4. Run it daily:
+   `nekopull.service` runs `nekopull daemon`. It resolves the API key and
+   client credentials once at start-up and keeps them in memory, then polls
+   every `[daemon] interval` (default `1d`).
 
-   ```sh
-   systemctl --user enable --now nekopull.timer
-   ```
+   It watches `config.toml`: editing the file takes effect at once — a new
+   show is polled immediately, filter changes apply to the next poll, and
+   changing `interval` reschedules without a restart. Credentials are the
+   exception: a stubbed value stays cached until you put a literal value in
+   the file or restart the service.
 
-   `nekopull.service` is a oneshot unit and `nekopull.timer` fires it at 04:00
-   every day, with `Persistent=true` so a run missed while the machine was off
-   happens at the next boot.
-
-   The timer also runs the service a minute after it is activated — so after
-   `enable --now` and after every login. That first run is where a keyring
-   password gets typed; make it count, because the 04:00 run is unattended:
-
-   ```ini
-   # ~/.gnupg/gpg-agent.conf
-   pinentry-program /usr/bin/pinentry-qt   # a unit has no terminal
-   default-cache-ttl 86400
-   max-cache-ttl 86400
-   ```
-
-   then `gpgconf --reload gpg-agent`. Without a GUI pinentry the lookup in the
-   unit fails; with a 2h default cache the unlock is gone before 04:00.
-
-   Alternatively run it as a daemon instead of a timer:
-
-   ```sh
-   systemctl --user disable --now nekopull.timer
-   systemctl --user enable --now nekopull-daemon.service
-   ```
-
-   `nekopull daemon` resolves the credentials once at start-up and keeps them
-   in memory, polling every `--interval` (default `1d`). The keyring is asked
-   only when the login session starts — while you are there — and the later
-   polls never touch it, so no passphrase has to survive in an agent.
-
-   The config is re-read before every poll, so adding shows or changing filters
-   takes effect on the next cycle without a restart. Credentials are the
-   exception: a stubbed value stays in memory, and only a literal value (or a
-   restart) replaces it. Changing `--interval` is a unit edit, so restart for
-   that.
-
-   To use a different time, add a drop-in:
-
-   ```sh
-   systemctl --user edit nekopull.timer
-   ```
-
-   ```ini
-   [Timer]
-   OnCalendar=
-   OnCalendar=*-*-* 06:00:00
-   ```
-
-   The empty assignment clears the packaged schedule; without it both would
-   fire.
+   A one-off poll is just `nekopull run`.
 
 ## Configuration
 
@@ -179,6 +134,12 @@ filter.
 To support another client, implement `version()` and `add(magnet, tags)` in a
 `TorrentClient` subclass and register it in `CLIENTS`; nothing else changes.
 
+### `[daemon]`
+
+| key | default | meaning |
+| --- | --- | --- |
+| `interval` | `1d` | time between polls, e.g. `30m`, `6h`, `1d` |
+
 ### Where credentials live
 
 If `secret-tool` (libsecret) is installed, the first `run` or `verify` moves
@@ -204,7 +165,8 @@ back in the file and it will be stored again.
 
 | command | what it does |
 | --- | --- |
-| `nekopull run` | poll every show, add new episodes |
+| `nekopull run` | poll every show once, add new episodes |
+| `nekopull daemon` | poll continuously and watch the config (used by the service) |
 | `nekopull run --dry-run` | report only, add nothing |
 | `nekopull run --show MEDIA_ID` | restrict to one show (repeatable) |
 | `nekopull lookup TEXT` | find show ids |

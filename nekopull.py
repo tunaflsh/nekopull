@@ -449,6 +449,22 @@ def _codec_ids(codecs: list[str]) -> list[int]:
     return mapped if len(mapped) == len(codecs) else []
 
 
+ME_URL = "https://nekobt.to/api/v1/users/@me"
+
+
+def api_key_valid(apikey: str) -> bool:
+    """Whether nekoBT accepts the key. Search works anonymously, so ask /users/@me."""
+    try:
+        payload = http_get(ME_URL, headers={"Cookie": f"ssid={apikey}"})
+    except NekobtError:
+        return False
+    try:
+        answer = json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    return not answer.get("error")
+
+
 def media_title(apikey: str, media_id: str) -> str | None:
     """The title nekoBT uses for a media id."""
     payload = http_get(
@@ -566,9 +582,11 @@ class Config:
     client: ClientConfig = field(default_factory=ClientConfig)
     state_path: Path = STATE_PATH
     annotations: dict[str, str] = field(default_factory=dict)
+    interval: str = "1d"
 
 
-_TOP_LEVEL_KEYS = {"apikey", "state_path", "defaults", "show", "client"}
+_TOP_LEVEL_KEYS = {"apikey", "state_path", "defaults", "show", "client", "daemon"}
+_DAEMON_KEYS = {"interval"}
 _SHOW_KEYS = {
     "media_id",
     "begin",
@@ -771,6 +789,13 @@ def load_config(
             " replace them with the stub by hand"
         )
 
+    daemon_raw = raw.get("daemon", {})
+    unknown = set(daemon_raw) - _DAEMON_KEYS
+    if unknown:
+        raise ConfigError(f"{path}: unknown daemon keys: {', '.join(sorted(unknown))}")
+    interval = str(daemon_raw.get("interval", "1d"))
+    _parse_interval(interval)  # validated here so a typo fails at load
+
     state_path = Path(raw.get("state_path", path.parent / "state.db"))
     return Config(
         apikey,
@@ -780,6 +805,7 @@ def load_config(
         client,
         state_path,
         _annotations(path),
+        interval,
     )
 
 
@@ -1177,25 +1203,57 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
 
 
 def command_daemon(config: Config, options: argparse.Namespace) -> int:
-    """Poll on an interval, keeping the resolved secrets in memory."""
-    interval = _parse_interval(options.interval)
+    """Poll on an interval, watching the config file for changes."""
     secrets: dict[str, str] = {}
+    path = Path(options.config)
+    interval = _daemon_interval(config, options)
     LOG.info(
-        "holding credentials in memory for the life of the process; polling every %s",
-        options.interval,
+        "holding credentials in memory; polling every %ss, watching %s",
+        interval,
+        path,
     )
+    stamp = _config_mtime(path)
+    next_poll = 0.0
     while True:
-        try:
-            config = load_config(options.config, migrate=False, cache=secrets)
-        except ConfigError as exc:
-            LOG.error("config reload failed (%s); keeping the previous one", exc)
-        try:
-            _run_once(config, dry_run=options.dry_run)
-        except KeyboardInterrupt:
-            raise
-        except Exception:  # a bad run must not kill the daemon
-            LOG.exception("run failed, will retry next interval")
-        time.sleep(interval)
+        now = time.monotonic()
+        if now >= next_poll:
+            try:
+                config = load_config(path, migrate=False, cache=secrets)
+            except ConfigError as exc:
+                LOG.error("config reload failed (%s); keeping the previous one", exc)
+            interval = _daemon_interval(config, options)
+            try:
+                _run_once(config, dry_run=options.dry_run)
+            except KeyboardInterrupt:
+                raise
+            except Exception:  # a bad run must not kill the daemon
+                LOG.exception("run failed, will retry next interval")
+            next_poll = time.monotonic() + interval
+            stamp = _config_mtime(path)
+        elif (current := _config_mtime(path)) != stamp:
+            stamp = current
+            try:
+                config = load_config(path, migrate=False, cache=secrets)
+            except ConfigError as exc:
+                LOG.error("config reload failed (%s); keeping the previous one", exc)
+            else:
+                LOG.info(
+                    "config changed; reloaded, polling now (every %ss)",
+                    _daemon_interval(config, options),
+                )
+                next_poll = 0.0
+        time.sleep(max(0.0, min(1.0, next_poll - time.monotonic())))
+
+
+def _config_mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _daemon_interval(config: Config, options: argparse.Namespace) -> int:
+    return _parse_interval(options.interval or config.interval)
 
 
 _INTERVAL = re.compile(r"^\s*(\d+)\s*([smhd])\s*$")
@@ -1368,6 +1426,15 @@ def command_annotate(config: Config, options: argparse.Namespace) -> int:
 def command_verify(config: Config) -> int:
     failures = 0
     print(f"api key: {config.apikey_source}")
+    if api_key_valid(config.apikey):
+        print("api key: accepted")
+    else:
+        print(
+            "api key: rejected — search works anonymously, so runs succeed"
+            " with lower rate limits and public magnets only",
+            file=sys.stderr,
+        )
+        failures += 1
     try:
         releases = fetch_releases(
             config.apikey,
@@ -1379,7 +1446,7 @@ def command_verify(config: Config) -> int:
         print(f"nekoBT: {exc}", file=sys.stderr)
         failures += 1
     else:
-        print(f"api key: works ({len(releases)} release(s) for {config.shows[0].media_id})")
+        print(f"nekoBT: reachable ({len(releases)} release(s) for {config.shows[0].media_id})")
     try:
         version = make_client(config.client).version()
     except ClientError as exc:
@@ -1423,7 +1490,9 @@ def build_parser() -> argparse.ArgumentParser:
         "daemon", help="poll continuously, resolving credentials only once"
     )
     daemon.add_argument(
-        "--interval", default="1d", help="time between polls, e.g. 30m, 1h, 1d (default: 1d)"
+        "--interval",
+        default=None,
+        help="override the [daemon] interval, e.g. 30m, 6h, 1d",
     )
     daemon.add_argument("--dry-run", action="store_true", help="report without adding anything")
     daemon.set_defaults(func=command_daemon)
