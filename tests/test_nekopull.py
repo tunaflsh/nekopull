@@ -172,6 +172,15 @@ class SelectTest(unittest.TestCase):
         self.assertEqual([release.episode for release in picks], [1, 2])
         self.assertEqual(picks[0].group, "B")
 
+    def test_other_codecs_are_recognised(self):
+        for title, expected in (
+            ("Show S01E01 1080p VP9", "vp9"),
+            ("Show S01E01 DVD XviD", "mpeg4"),
+            ("Show S01E01 MPEG-2", "mpeg2"),
+            ("Show S01E01 BD VC-1", "vc1"),
+        ):
+            self.assertEqual(parse_release(title, MAGNET).codec, expected, title)
+
     def test_unparsed_episodes_dropped(self):
         settings = Defaults(resolutions=["1080p"])
         self.assertEqual(select([parse_release("Show 1080p {Tags:L3;}", MAGNET)], settings), [])
@@ -226,10 +235,18 @@ class ConfigTest(unittest.TestCase):
             merged = config.defaults.merged(config.shows[0].overrides())
             self.assertEqual(merged.codecs, ["h264", "av1"])
 
+    def test_codec_values_come_from_the_parser(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ncodec = ["vp9", "mpeg2"]\n'
+            )
+            config = load_config(path, migrate=False)
+            self.assertEqual(config.shows[0].codecs, ["vp9", "mpeg2"])
+
     def test_unknown_codec_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
-                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ncodec = "vp9"\n'
+                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ncodec = "h266"\n'
             )
             with self.assertRaises(ConfigError):
                 load_config(path, migrate=False)

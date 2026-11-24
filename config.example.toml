@@ -8,7 +8,7 @@ apikey = "YOUR-API-KEY"
 # 3 full fansubs. Unset means any level; the highest accepted one wins.
 [defaults]
 # levels = [2, 3]
-# codec = "h265"            # h264, h265 or av1; a string or a list
+# codec = "h265"            # h264, h265, av1, vp9, vc1, mpeg2, mpeg4
 resolutions = ["1080p"]
 allow_batch = false
 # groups = ["erai-raws"]   # preference only, never a filter

@@ -89,7 +89,7 @@ Any key here can also be set on a single `[[show]]` to override it.
 | key | default | meaning |
 | --- | --- | --- |
 | `levels` | any | sub levels to accept, e.g. `[2, 3]` |
-| `codec` | any | accepted codecs: `h264`, `h265`, `av1`; a string or a list |
+| `codec` | any | accepted codecs: `h264`, `h265`, `av1`, `vp9`, `vc1`, `mpeg2`, `mpeg4`; a string or a list |
 | `resolutions` | `["1080p"]` | accepted resolutions; a release without one is skipped |
 | `groups` | `[]` | release groups to prefer (a preference, not a filter) |
 | `allow_batch` | `false` | accept season batches |

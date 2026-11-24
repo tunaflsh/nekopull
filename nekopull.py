@@ -61,16 +61,7 @@ _EP_NXNN = re.compile(r"(?i)\b(\d{1,2})x(\d{1,3})(?:v(\d+))?\b")
 _EP_PREFIXED = re.compile(r"(?i)\bEP?(\d{1,4})(?:v(\d+))?\b")
 _EP_DASH = re.compile(r"(?:^|\s)-\s(\d{1,4})(?:v(\d+))?(?=[\s\[(]|$)")
 _RESOLUTION = re.compile(r"(?i)\b(2160p|1440p|1080p|720p|576p|480p)\b")
-_CODEC = re.compile(r"(?i)\b(hevc|h\.?265|x265|av1|h\.?264|x264|avc)\b")
-_SOURCE = re.compile(
-    r"(?i)\b(blu-?ray|bd(?:mv|rip)?|web-?dl|web-?rip|web|hdtv|tvrip|dvd(?:rip)?)\b"
-)
-_BATCH = re.compile(r"(?i)\b(batch|complete|全集)\b|\bS\d{1,2}\s*(?:\(|\[|$)")
-_GROUP_PREFIX = re.compile(r"^\s*\[([^\]]+)\]")
-_GROUP_SUFFIX = re.compile(r"[-@]([A-Za-z0-9_.]+)\s*$")
-_INFOHASH = re.compile(r"urn:btih:([0-9a-zA-Z]{32,40})")
-
-_CODEC_MAP = {
+_CODEC_TOKENS = {
     "hevc": "h265",
     "h.265": "h265",
     "h265": "h265",
@@ -80,7 +71,29 @@ _CODEC_MAP = {
     "h264": "h264",
     "x264": "h264",
     "avc": "h264",
+    "vp9": "vp9",
+    "vc-1": "vc1",
+    "vc1": "vc1",
+    "mpeg-2": "mpeg2",
+    "mpeg2": "mpeg2",
+    "mpeg-4": "mpeg4",
+    "mpeg4": "mpeg4",
+    "divx": "mpeg4",
+    "xvid": "mpeg4",
 }
+_CODEC = re.compile(
+    r"(?i)\b("
+    + "|".join(re.escape(token) for token in sorted(_CODEC_TOKENS, key=len, reverse=True))
+    + r")\b"
+)
+_SOURCE = re.compile(
+    r"(?i)\b(blu-?ray|bd(?:mv|rip)?|web-?dl|web-?rip|web|hdtv|tvrip|dvd(?:rip)?)\b"
+)
+_BATCH = re.compile(r"(?i)\b(batch|complete|全集)\b|\bS\d{1,2}\s*(?:\(|\[|$)")
+_GROUP_PREFIX = re.compile(r"^\s*\[([^\]]+)\]")
+_GROUP_SUFFIX = re.compile(r"[-@]([A-Za-z0-9_.]+)\s*$")
+_INFOHASH = re.compile(r"urn:btih:([0-9a-zA-Z]{32,40})")
+
 _SOURCE_MAP = {
     "bluray": "bluray",
     "blu-ray": "bluray",
@@ -181,7 +194,7 @@ def parse_release(
         size=size,
         level=level,
         resolution=resolution.group(1).lower() if resolution else None,
-        codec=_CODEC_MAP.get(codec_match.group(1).lower()) if codec_match else None,
+        codec=_CODEC_TOKENS.get(codec_match.group(1).lower()) if codec_match else None,
         source=_SOURCE_MAP.get(source_match.group(1).lower()) if source_match else None,
         group=group,
         season=season,
@@ -388,7 +401,7 @@ class Config:
 _SHOW_KEYS = {"media_id", "name", "levels", "codec", "resolutions", "groups", "allow_batch"}
 _DEFAULT_KEYS = {"levels", "codec", "resolutions", "allow_batch", "groups"}
 _CLIENT_KEYS = {"type", "url", "username", "password", "download_dir"}
-_CODECS = {"h264", "h265", "av1"}
+_CODECS = set(_CODEC_TOKENS.values())
 
 
 def _as_list(value) -> list:
