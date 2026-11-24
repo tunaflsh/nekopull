@@ -5,9 +5,9 @@
 apikey = "YOUR-API-KEY"
 
 # Sub levels to accept: 0 official, 1 lightly edited official, 2 small fansubs,
-# 3 full fansubs. Empty list = any level; the highest accepted level wins.
+# 3 full fansubs. Unset means any level; the highest accepted one wins.
 [defaults]
-levels = [2, 3]
+# levels = [2, 3]
 # codec = "h265"            # h264, h265 or av1; a string or a list
 resolutions = ["1080p"]
 allow_batch = false
@@ -27,7 +27,8 @@ password = ""
 media_id = "s1539"
 name = "towa no yuugure"
 
+# Per-show keys override [defaults]:
 [[show]]
 media_id = "s4147"
 name = "enen no shouboutai"
-levels = [0, 1]
+# levels = [0, 1]
