@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import http.server
+import io
 import json
 import sys
 import tempfile
@@ -337,7 +339,7 @@ class ConfigTest(unittest.TestCase):
                 tmp,
                 'apikey = "k"\n\n[defaults]\ncodec = "h265"\n\n'
                 '[[show]]\nmedia_id = "s1"\ncodec = ["h264", "AV1"]\n'
-                'video_type = ["webdl", "BD_Remux"]\n',
+                'type = ["webdl", "BD_Remux"]\n',
             )
             config = load_config(path, migrate=False)
             self.assertEqual(config.defaults.codecs, ["h265"])
@@ -351,10 +353,35 @@ class ConfigTest(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_config(path, migrate=False)
 
+    def test_batch_key_and_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[defaults]\nbatch = true\n\n'
+                '[[show]]\nmedia_id = "s1"\nbatch = false\n',
+            )
+            config = load_config(path, migrate=False)
+            self.assertTrue(config.defaults.allow_batch)
+            merged = config.defaults.merged(config.shows[0].overrides())
+            self.assertFalse(merged.allow_batch)
+
+    def test_list_uses_config_key_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ntype = ["web_dl"]\nbatch = true\n',
+            )
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                nekopull.command_list(load_config(path, migrate=False))
+            output = buffer.getvalue()
+            self.assertIn("type=['web_dl']", output)
+            self.assertIn("batch=True", output)
+
     def test_unknown_video_type_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
-                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nvideo_type = "bluray"\n'
+                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ntype = "bluray"\n'
             )
             with self.assertRaises(ConfigError):
                 load_config(path, migrate=False)

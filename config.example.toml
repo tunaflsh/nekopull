@@ -9,9 +9,9 @@ apikey = "YOUR-API-KEY"
 [defaults]
 # levels = [2, 3]
 # codec = "h265"            # h264 h265 av1 vp9 mpeg2 xvid wmv vc1
-# video_type = "web_dl"     # web_dl bd_remux dvd_raw ...
+# type = "web_dl"           # web_dl bd_remux dvd_raw ...
 resolutions = ["1080p"]
-allow_batch = false
+batch = false
 # private_magnet = true    # private magnet carries your passkey; false = public
 # groups = ["erai-raws"]   # preference only, never a filter
 

@@ -491,21 +491,24 @@ _SHOW_KEYS = {
     "name",
     "levels",
     "codec",
-    "video_type",
+    "type",
     "resolutions",
     "groups",
-    "allow_batch",
+    "batch",
     "private_magnet",
 }
 _DEFAULT_KEYS = {
     "levels",
     "codec",
-    "video_type",
+    "type",
     "resolutions",
-    "allow_batch",
+    "batch",
     "private_magnet",
     "groups",
 }
+
+# config-facing key -> Defaults attribute
+_DEFAULTS_ALIASES = {"type": "video_types", "batch": "allow_batch"}
 _CLIENT_KEYS = {"type", "url", "username", "password", "download_dir"}
 _CODECS = set(_CODEC_IDS)
 
@@ -576,8 +579,12 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
             raise ConfigError(f"{path}: unknown defaults key `{key}`")
         if key == "codec":
             defaults.codecs = _codec_list(path, "[defaults]", value) or []
-        elif key == "video_type":
+        elif key == "type":
             defaults.video_types = _video_type_list(path, "[defaults]", value) or []
+        elif key == "batch":
+            if not isinstance(value, bool):
+                raise ConfigError(f"{path}: [defaults] `batch` must be true or false")
+            defaults.allow_batch = value
         elif key == "private_magnet":
             if not isinstance(value, bool):
                 raise ConfigError(f"{path}: [defaults] `private_magnet` must be true or false")
@@ -595,18 +602,21 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
         media_id = entry.get("media_id")
         if not media_id:
             raise ConfigError(f"{path}: show #{index} is missing `media_id`")
-        if "private_magnet" in entry and not isinstance(entry["private_magnet"], bool):
-            raise ConfigError(f"{path}: show #{index}: `private_magnet` must be true or false")
+        for boolean_key in ("batch", "private_magnet"):
+            if boolean_key in entry and not isinstance(entry[boolean_key], bool):
+                raise ConfigError(
+                    f"{path}: show #{index}: `{boolean_key}` must be true or false"
+                )
         shows.append(
             Show(
                 media_id=str(media_id),
                 name=str(entry.get("name", media_id)),
                 levels=entry.get("levels"),
                 codecs=_codec_list(path, f"show #{index}", entry.get("codec")),
-                video_types=_video_type_list(path, f"show #{index}", entry.get("video_type")),
+                video_types=_video_type_list(path, f"show #{index}", entry.get("type")),
                 resolutions=entry.get("resolutions"),
                 groups=entry.get("groups"),
-                allow_batch=entry.get("allow_batch"),
+                allow_batch=entry.get("batch"),
                 private_magnet=entry.get("private_magnet"),
             )
         )
@@ -1060,7 +1070,12 @@ def command_lookup(options: argparse.Namespace) -> int:
 
 def command_list(config: Config) -> int:
     for show in config.shows:
-        overrides = {key: value for key, value in show.overrides().items() if value is not None}
+        display = {"video_types": "type", "allow_batch": "batch"}
+        overrides = {
+            display.get(key, key): value
+            for key, value in show.overrides().items()
+            if value is not None
+        }
         extra = " ".join(f"{key}={value}" for key, value in overrides.items())
         print(f"{show.media_id:>10}  {show.name}" + (f"  ({extra})" if extra else ""))
     return 0

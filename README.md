@@ -97,10 +97,10 @@ Any key here can also be set on a single `[[show]]` to override it.
 | --- | --- | --- |
 | `levels` | any | sub levels to accept, e.g. `[2, 3]` |
 | `codec` | any | accepted codecs: `h264`, `h265`, `av1`, `vp9`, `mpeg2`, `xvid`, `wmv`, `vc1`; a string or a list |
-| `video_type` | any | release type, e.g. `web_dl`, `bd_remux`, `dvd_raw`; a string or a list |
+| `type` | any | release type, e.g. `web_dl`, `bd_remux`, `dvd_raw`; a string or a list |
 | `resolutions` | `["1080p"]` | accepted resolutions, read from the title; a release without one is skipped |
 | `groups` | `[]` | release groups to prefer (a preference, not a filter) |
-| `allow_batch` | `false` | accept season batches, tracked per season |
+| `batch` | `false` | accept season batches, tracked per season |
 | `private_magnet` | `true` | hand over your private magnet (carries your passkey) |
 
 One release is taken per episode. When several match, the order of preference is
@@ -118,15 +118,15 @@ your `groups`, then the highest accepted sub level; then the newest release in t
 Leave `levels` unset to accept any. Only listed levels are eligible, and an
 untagged release is skipped when the list is set.
 
-**Video types** are where the release came from rather than what is in it:
+**`type`** is where the release came from rather than what is in it:
 `web_dl`, `web_encode`, `web_mini`, `bd_disc`, `bd_mini`, `bd_encode`,
 `bd_remux`, `dvd_disc`, `dvd_raw`, `dvd_encode`, `tv_raw`, `tv_encode`, `vhs`,
 `laserdisc`, `hybrid`, `other`.
 
-`levels`, `codec` and `video_type` are also sent to nekoBT, so the newest-100
+`levels`, `codec` and `type` are also sent to nekoBT, so the newest-100
 window contains matching releases instead of whatever was uploaded last. A
-`codec` or `video_type` list containing a value the API does not know stays a
-local filter.
+`codec` or `type` list containing a value the API does not know stays a local
+filter.
 
 ### `[client]`
 
