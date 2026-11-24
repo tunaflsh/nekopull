@@ -58,7 +58,7 @@ python3 -m venv .venv && .venv/bin/pip install .
    every day, with `Persistent=true` so a run missed while the machine was off
    happens at the next boot.
 
-   For another time, override the packaged unit instead of editing it:
+   To use a different time, add a drop-in:
 
    ```sh
    systemctl --user edit nekopull.timer
@@ -70,7 +70,7 @@ python3 -m venv .venv && .venv/bin/pip install .
    OnCalendar=*-*-* 06:00:00
    ```
 
-   The empty assignment resets the packaged schedule; without it both would
+   The empty assignment clears the packaged schedule; without it both would
    fire. `systemctl edit` reloads configuration itself, so the running timer
    picks up the new value.
 
