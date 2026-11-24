@@ -4,10 +4,6 @@
 # when secret-tool is available, leaving `apikey = "libsecret"` behind.
 apikey = "YOUR-API-KEY"
 
-# Hand your private magnet to the client so downloads count on your account.
-# false uses the public magnet instead.
-# private_magnet = true
-
 # Sub levels to accept: 0 official, 1 lightly edited official, 2 small fansubs,
 # 3 full fansubs. Unset means any level; the highest accepted one wins.
 [defaults]
@@ -16,6 +12,7 @@ apikey = "YOUR-API-KEY"
 # video_type = "web_dl"     # web_dl bd_remux dvd_raw ...
 resolutions = ["1080p"]
 allow_batch = false
+# private_magnet = true    # private magnet carries your passkey; false = public
 # groups = ["erai-raws"]   # preference only, never a filter
 
 [client]

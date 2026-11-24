@@ -87,7 +87,6 @@ Everything except `[[show]]` is optional.
 | key | default | meaning |
 | --- | --- | --- |
 | `apikey` | — | nekoBT API key; moved to libsecret automatically when available |
-| `private_magnet` | `true` | use your private magnet (carries your passkey); can be set per show |
 | `state_path` | `~/.local/state/nekopull/state.db` | where grabbed episodes are recorded |
 
 ### `[defaults]` and per-show overrides
@@ -102,6 +101,7 @@ Any key here can also be set on a single `[[show]]` to override it.
 | `resolutions` | `["1080p"]` | accepted resolutions, read from the title; a release without one is skipped |
 | `groups` | `[]` | release groups to prefer (a preference, not a filter) |
 | `allow_batch` | `false` | accept season batches, tracked per season |
+| `private_magnet` | `true` | hand over your private magnet (carries your passkey) |
 
 One release is taken per episode. When several match, the order of preference is
 your `groups`, then the highest accepted sub level; then the newest release in the feed.

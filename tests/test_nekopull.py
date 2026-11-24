@@ -316,7 +316,7 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(config.apikey_source, "config file")
             self.assertEqual(config.shows[0].media_id, "s1")
             self.assertEqual(config.client.type, "transmission")
-            self.assertTrue(config.private_magnet)
+            self.assertTrue(config.defaults.private_magnet)
             self.assertEqual(config.state_path, path.parent / "state.db")
 
     def test_show_override_merge(self):
@@ -367,7 +367,9 @@ class ConfigTest(unittest.TestCase):
             )
             config = load_config(path, migrate=False)
             self.assertFalse(config.shows[0].private_magnet)
-            self.assertTrue(config.private_magnet)
+            self.assertTrue(config.defaults.private_magnet)
+            merged = config.defaults.merged(config.shows[0].overrides())
+            self.assertFalse(merged.private_magnet)
 
     def test_private_magnet_per_show_must_be_boolean(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -381,15 +383,25 @@ class ConfigTest(unittest.TestCase):
     def test_private_magnet_can_be_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
-                tmp, 'apikey = "k"\nprivate_magnet = false\n\n[[show]]\nmedia_id = "s1"\n'
+                tmp,
+                'apikey = "k"\n\n[defaults]\nprivate_magnet = false\n\n'
+                '[[show]]\nmedia_id = "s1"\n',
             )
-            self.assertFalse(load_config(path, migrate=False).private_magnet)
+            self.assertFalse(load_config(path, migrate=False).defaults.private_magnet)
 
     def test_private_magnet_must_be_boolean(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
-                tmp, 'apikey = "k"\nprivate_magnet = "no"\n\n[[show]]\nmedia_id = "s1"\n'
+                tmp,
+                'apikey = "k"\n\n[defaults]\nprivate_magnet = "no"\n\n'
+                '[[show]]\nmedia_id = "s1"\n',
             )
+            with self.assertRaises(ConfigError):
+                load_config(path, migrate=False)
+
+    def test_unknown_top_level_key_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "k"\npivat = false\n\n[[show]]\nmedia_id = "s1"\n')
             with self.assertRaises(ConfigError):
                 load_config(path, migrate=False)
 

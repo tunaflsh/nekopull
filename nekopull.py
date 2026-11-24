@@ -414,6 +414,7 @@ class Defaults:
     video_types: list[str] = field(default_factory=list)
     resolutions: list[str] = field(default_factory=lambda: ["1080p"])
     allow_batch: bool = False
+    private_magnet: bool = True
     groups: list[str] = field(default_factory=list)
 
     def merged(self, overrides: dict) -> Defaults:
@@ -423,6 +424,7 @@ class Defaults:
             "video_types": list(self.video_types),
             "resolutions": list(self.resolutions),
             "allow_batch": self.allow_batch,
+            "private_magnet": self.private_magnet,
             "groups": list(self.groups),
         }
         for key, value in overrides.items():
@@ -450,6 +452,7 @@ class Show:
             "video_types": None if self.video_types is None else list(self.video_types),
             "resolutions": None if self.resolutions is None else list(self.resolutions),
             "allow_batch": self.allow_batch,
+            "private_magnet": self.private_magnet,
             "groups": None if self.groups is None else list(self.groups),
         }
 
@@ -480,9 +483,9 @@ class Config:
     shows: list[Show]
     client: ClientConfig = field(default_factory=ClientConfig)
     state_path: Path = STATE_PATH
-    private_magnet: bool = True
 
 
+_TOP_LEVEL_KEYS = {"apikey", "state_path", "defaults", "show", "client"}
 _SHOW_KEYS = {
     "media_id",
     "name",
@@ -494,7 +497,15 @@ _SHOW_KEYS = {
     "allow_batch",
     "private_magnet",
 }
-_DEFAULT_KEYS = {"levels", "codec", "video_type", "resolutions", "allow_batch", "groups"}
+_DEFAULT_KEYS = {
+    "levels",
+    "codec",
+    "video_type",
+    "resolutions",
+    "allow_batch",
+    "private_magnet",
+    "groups",
+}
 _CLIENT_KEYS = {"type", "url", "username", "password", "download_dir"}
 _CODECS = set(_CODEC_IDS)
 
@@ -540,6 +551,13 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path}: {exc}") from None
 
+    unknown_top = set(raw) - _TOP_LEVEL_KEYS
+    if unknown_top:
+        raise ConfigError(
+            f"{path}: unknown keys: {', '.join(sorted(unknown_top))}"
+            f" (known: {', '.join(sorted(_TOP_LEVEL_KEYS))})"
+        )
+
     stash = migrate and secret_tool_available()
     stubbed: list[str] = []
     apikey = _credential(
@@ -560,6 +578,10 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
             defaults.codecs = _codec_list(path, "[defaults]", value) or []
         elif key == "video_type":
             defaults.video_types = _video_type_list(path, "[defaults]", value) or []
+        elif key == "private_magnet":
+            if not isinstance(value, bool):
+                raise ConfigError(f"{path}: [defaults] `private_magnet` must be true or false")
+            defaults.private_magnet = value
         else:
             setattr(defaults, key, value)
 
@@ -617,12 +639,8 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
             " replace them with the stub by hand"
         )
 
-    private_magnet = raw.get("private_magnet", True)
-    if not isinstance(private_magnet, bool):
-        raise ConfigError(f"{path}: `private_magnet` must be true or false")
-
     state_path = Path(raw.get("state_path", path.parent / "state.db"))
-    return Config(apikey, apikey_source, defaults, shows, client, state_path, private_magnet)
+    return Config(apikey, apikey_source, defaults, shows, client, state_path)
 
 
 def _credential(
@@ -980,11 +998,7 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                     codecs=settings.codecs,
                     video_types=settings.video_types,
                     allow_batch=settings.allow_batch,
-                    private_magnet=(
-                        config.private_magnet
-                        if show.private_magnet is None
-                        else show.private_magnet
-                    ),
+                    private_magnet=settings.private_magnet,
                 )
             except NekobtError as exc:
                 LOG.error("%s: %s", show.name, exc)
@@ -1057,7 +1071,10 @@ def command_verify(config: Config) -> int:
     print(f"api key: {config.apikey_source}")
     try:
         releases = fetch_releases(
-            config.apikey, config.shows[0].media_id, limit=1, private_magnet=config.private_magnet
+            config.apikey,
+            config.shows[0].media_id,
+            limit=1,
+            private_magnet=config.defaults.private_magnet,
         )
     except NekobtError as exc:
         print(f"nekoBT: {exc}", file=sys.stderr)
