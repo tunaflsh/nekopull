@@ -135,12 +135,17 @@ class FilterTest(unittest.TestCase):
         proper = parse_release("Show S01E01v2 1080p {Tags:L3;}", MAGNET)
         self.assertTrue(passes_filters(proper, self.settings))
 
-    def test_min_seeders(self):
-        strict = Defaults(resolutions=["1080p"], min_seeders=10)
-        quiet = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=2)
-        busy = parse_release("Show S01E01 1080p {Tags:L3;}", MAGNET, seeders=40)
-        self.assertFalse(passes_filters(quiet, strict))
-        self.assertTrue(passes_filters(busy, strict))
+    def test_codec(self):
+        settings = Defaults(codecs=["h265"], resolutions=["1080p"])
+        hevc = parse_release("Show S01E01 1080p HEVC {Tags:L3;}", MAGNET)
+        h264 = parse_release("Show S01E01 1080p x264 {Tags:L3;}", MAGNET)
+        self.assertTrue(passes_filters(hevc, settings))
+        self.assertFalse(passes_filters(h264, settings))
+
+    def test_no_codec_filter_accepts_everything(self):
+        settings = Defaults(resolutions=["1080p"])
+        h264 = parse_release("Show S01E01 1080p x264 {Tags:L3;}", MAGNET)
+        self.assertTrue(passes_filters(h264, settings))
 
     def test_prefers_higher_level(self):
         l0 = parse_release("Show S01E01 1080p {Tags:L0;}", MAGNET, seeders=100)
@@ -190,7 +195,7 @@ class ConfigTest(unittest.TestCase):
     def test_minimal(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\nname = "one"\n')
-            config = load_config(path)
+            config = load_config(path, migrate=False)
             self.assertEqual(config.apikey, "k")
             self.assertEqual(config.apikey_source, "config file")
             self.assertEqual(config.shows[0].media_id, "s1")
@@ -204,10 +209,30 @@ class ConfigTest(unittest.TestCase):
                 'apikey = "k"\n\n[defaults]\nlevels = [3]\n\n'
                 '[[show]]\nmedia_id = "s1"\nlevels = [0, 1]\n',
             )
-            config = load_config(path)
+            config = load_config(path, migrate=False)
             merged = config.defaults.merged(config.shows[0].overrides())
             self.assertEqual(merged.levels, [0, 1])
             self.assertEqual(merged.resolutions, ["1080p"])
+
+    def test_codec_accepts_string_or_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[defaults]\ncodec = "h265"\n\n'
+                '[[show]]\nmedia_id = "s1"\ncodec = ["h264", "AV1"]\n',
+            )
+            config = load_config(path, migrate=False)
+            self.assertEqual(config.defaults.codecs, ["h265"])
+            merged = config.defaults.merged(config.shows[0].overrides())
+            self.assertEqual(merged.codecs, ["h264", "av1"])
+
+    def test_unknown_codec_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ncodec = "vp9"\n'
+            )
+            with self.assertRaises(ConfigError):
+                load_config(path, migrate=False)
 
     def test_client_section(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -217,7 +242,7 @@ class ConfigTest(unittest.TestCase):
                 'url = "http://box:9091/transmission/rpc"\ndownload_dir = "/tv"\n\n'
                 '[[show]]\nmedia_id = "s1"\n',
             )
-            config = load_config(path)
+            config = load_config(path, migrate=False)
             self.assertEqual(config.client.url, "http://box:9091/transmission/rpc")
             self.assertEqual(config.client.download_dir, "/tv")
 
@@ -228,57 +253,100 @@ class ConfigTest(unittest.TestCase):
                 'apikey = "k"\n\n[client]\ntype = "deluge"\n\n[[show]]\nmedia_id = "s1"\n',
             )
             with self.assertRaises(ConfigError):
-                load_config(path)
+                load_config(path, migrate=False)
 
-    def test_missing_key_and_no_provider(self):
+    def test_missing_apikey(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(tmp, '[[show]]\nmedia_id = "s1"\n')
             with self.assertRaises(ConfigError):
-                load_config(path)
+                load_config(path, migrate=False)
 
     def test_unknown_show_key(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ntitle = "x"\n')
+            path = write_config(
+                tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\ntitle = "x"\n'
+            )
             with self.assertRaises(ConfigError):
-                load_config(path)
+                load_config(path, migrate=False)
 
-    def test_libsecret_key(self):
+    def test_key_migrated_to_libsecret(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
-                tmp,
-                '[secrets]\nprovider = "libsecret"\nservice = "nekopull"\n\n'
-                '[[show]]\nmedia_id = "s1"\n',
+                tmp, 'apikey = "secret-value"\n\n[[show]]\nmedia_id = "s1"\n'
             )
-            with mock.patch("nekopull.shutil.which", return_value="/usr/bin/secret-tool"), \
+            with mock.patch("nekopull.secret_tool_available", return_value=True), \
                     mock.patch(
                         "nekopull.subprocess.run",
-                        return_value=SimpleNamespace(returncode=0, stdout="SECRET\n"),
+                        return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
                     ) as run:
                 config = load_config(path)
-            self.assertEqual(config.apikey, "SECRET")
+            self.assertEqual(config.apikey, "secret-value")
             self.assertIn("libsecret", config.apikey_source)
-            self.assertEqual(run.call_args.args[0][:2], ["secret-tool", "lookup"])
+            self.assertEqual(run.call_args.kwargs["input"], "secret-value\n")
+            self.assertIn("store", run.call_args.args[0])
+            self.assertEqual(
+                path.read_text(),
+                'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n',
+            )
 
-    def test_libsecret_missing_entry(self):
+    def test_migration_preserves_a_trailing_comment(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
-                tmp, '[secrets]\nprovider = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n'
+                tmp, 'apikey = "secret-value"  # inline\n\n[[show]]\nmedia_id = "s1"\n'
             )
-            with mock.patch("nekopull.shutil.which", return_value="/usr/bin/secret-tool"), \
+            with mock.patch("nekopull.secret_tool_available", return_value=True), \
                     mock.patch(
                         "nekopull.subprocess.run",
-                        return_value=SimpleNamespace(returncode=1, stdout=""),
+                        return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+                    ):
+                load_config(path)
+            self.assertIn('apikey = "libsecret"  # inline', path.read_text())
+
+    def test_migration_skipped_for_dry_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "secret-value"\n\n[[show]]\nmedia_id = "s1"\n'
+            )
+            config = load_config(path, migrate=False)
+            self.assertIn("secret-value", path.read_text())
+            self.assertEqual(config.apikey_source, "config file")
+
+    def test_migration_skipped_without_secret_tool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "secret-value"\n\n[[show]]\nmedia_id = "s1"\n'
+            )
+            with mock.patch("nekopull.secret_tool_available", return_value=False):
+                config = load_config(path)
+            self.assertIn("secret-value", path.read_text())
+            self.assertEqual(config.apikey, "secret-value")
+
+    def test_stub_reads_from_libsecret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n'
+            )
+            with mock.patch("nekopull.secret_tool_available", return_value=True), \
+                    mock.patch(
+                        "nekopull.subprocess.run",
+                        return_value=SimpleNamespace(returncode=0, stdout="stored\n", stderr=""),
+                    ):
+                config = load_config(path)
+            self.assertEqual(config.apikey, "stored")
+            self.assertIn("libsecret", config.apikey_source)
+
+    def test_stub_without_stored_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp, 'apikey = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n'
+            )
+            with mock.patch("nekopull.secret_tool_available", return_value=True), \
+                    mock.patch(
+                        "nekopull.subprocess.run",
+                        return_value=SimpleNamespace(returncode=1, stdout="", stderr=""),
                     ):
                 with self.assertRaises(ConfigError):
                     load_config(path)
-
-    def test_unknown_secrets_provider(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = write_config(
-                tmp, '[secrets]\nprovider = "pass"\n\n[[show]]\nmedia_id = "s1"\n'
-            )
-            with self.assertRaises(ConfigError):
-                load_config(path)
 
 
 class FeedParsingTest(unittest.TestCase):

@@ -71,8 +71,7 @@ python3 -m venv .venv && .venv/bin/pip install .
    ```
 
    The empty assignment clears the packaged schedule; without it both would
-   fire. `systemctl edit` reloads configuration itself, so the running timer
-   picks up the new value.
+   fire.
 
 ## Configuration
 
@@ -80,7 +79,7 @@ Everything except `[[show]]` is optional.
 
 | key | default | meaning |
 | --- | --- | --- |
-| `apikey` | — | nekoBT API key; may be replaced by `[secrets]` |
+| `apikey` | — | nekoBT API key; moved to libsecret automatically when available |
 | `state_path` | `~/.local/state/nekopull/state.db` | where grabbed episodes are recorded |
 
 ### `[defaults]` and per-show overrides
@@ -90,9 +89,9 @@ Any key here can also be set on a single `[[show]]` to override it.
 | key | default | meaning |
 | --- | --- | --- |
 | `levels` | any | sub levels to accept, e.g. `[2, 3]` |
+| `codec` | any | accepted codecs: `h264`, `h265`, `av1`; a string or a list |
 | `resolutions` | `["1080p"]` | accepted resolutions; a release without one is skipped |
 | `groups` | `[]` | release groups to prefer (a preference, not a filter) |
-| `min_seeders` | `0` | skip releases with fewer seeders |
 | `allow_batch` | `false` | accept season batches |
 
 One release is taken per episode. When several match, the order of preference is
@@ -122,21 +121,23 @@ untagged release is skipped when the list is set.
 To support another client, implement `version()` and `add(magnet, tags)` in a
 `TorrentClient` subclass and register it in `CLIENTS`; nothing else changes.
 
-### Storing the API key in libsecret
+### Where the API key lives
 
-```sh
-secret-tool store --label='nekopull API key' service nekopull username api
-```
+If `secret-tool` (libsecret) is installed, the first `run` or `verify` moves the
+key out of the file: it is stored in the Secret Service and the line is
+rewritten to
 
 ```toml
-[secrets]
-provider = "libsecret"
-service = "nekopull"   # default
-username = "api"       # default
+apikey = "libsecret"
 ```
 
-If `apikey` is present it wins; otherwise the key is read from the Secret
-Service at start-up, so it never needs to be in the config file.
+From then on the key is read back at start-up, so `config.toml` holds no secret.
+Without libsecret the value stays in the file and is used as is; `--dry-run`
+never rewrites anything.
+
+If the keyring is reset, nekopull reports that the stored key is gone — put a
+real value back in the file and it will be stored again. The stash is stored as
+`service nekopull username api` in case you want to inspect it.
 
 ## Commands
 

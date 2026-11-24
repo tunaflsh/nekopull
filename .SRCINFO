@@ -10,6 +10,7 @@ pkgbase = nekopull
 	makedepends = python-setuptools
 	makedepends = python-wheel
 	depends = python
+	optdepends = libsecret: keep the API key in the Secret Service
 	source = nekopull-0.1.0.tar.gz::https://github.com/tunaflsh/nekopull/archive/v0.1.0.tar.gz
 	sha256sums = SKIP
 

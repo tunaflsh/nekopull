@@ -1,15 +1,15 @@
 # Copy to ~/.config/nekopull/config.toml
 
-# API key, either inline:
+# API key. On the first `run` or `verify`, nekopull moves it into libsecret
+# when secret-tool is available, leaving `apikey = "libsecret"` behind.
 apikey = "YOUR-API-KEY"
-# ...or omit it and read it from libsecret instead (see below).
 
 # Sub levels to accept: 0 official, 1 lightly edited official, 2 small fansubs,
 # 3 full fansubs. Empty list = any level; the highest accepted level wins.
 [defaults]
 levels = [2, 3]
+# codec = "h265"            # h264, h265 or av1; a string or a list
 resolutions = ["1080p"]
-min_seeders = 0
 allow_batch = false
 # groups = ["erai-raws"]   # preference only, never a filter
 
@@ -19,17 +19,6 @@ url = "http://127.0.0.1:9091/transmission/rpc"
 username = ""
 password = ""
 download_dir = "/data/torrents/anime"
-
-# Keep the key in the Secret Service instead of this file:
-#
-#   secret-tool store --label='nekopull API key' service nekopull username api
-#
-# then delete the `apikey` line above and uncomment:
-#
-# [secrets]
-# provider = "libsecret"
-# service = "nekopull"
-# username = "api"
 
 # One block per show; find ids with `nekopull lookup "title"`.
 [[show]]

@@ -324,16 +324,16 @@ class ConfigError(RuntimeError):
 @dataclass(slots=True)
 class Defaults:
     levels: list[int] = field(default_factory=list)
+    codecs: list[str] = field(default_factory=list)
     resolutions: list[str] = field(default_factory=lambda: ["1080p"])
-    min_seeders: int = 0
     allow_batch: bool = False
     groups: list[str] = field(default_factory=list)
 
     def merged(self, overrides: dict) -> Defaults:
         data = {
             "levels": list(self.levels),
+            "codecs": list(self.codecs),
             "resolutions": list(self.resolutions),
-            "min_seeders": self.min_seeders,
             "allow_batch": self.allow_batch,
             "groups": list(self.groups),
         }
@@ -348,16 +348,16 @@ class Show:
     media_id: str
     name: str
     levels: list[int] | None = None
+    codecs: list[str] | None = None
     resolutions: list[str] | None = None
     groups: list[str] | None = None
     allow_batch: bool | None = None
-    min_seeders: int | None = None
 
     def overrides(self) -> dict:
         return {
             "levels": None if self.levels is None else list(self.levels),
+            "codecs": None if self.codecs is None else list(self.codecs),
             "resolutions": None if self.resolutions is None else list(self.resolutions),
-            "min_seeders": self.min_seeders,
             "allow_batch": self.allow_batch,
             "groups": None if self.groups is None else list(self.groups),
         }
@@ -365,8 +365,10 @@ class Show:
 
 DEFAULT_CLIENT_TYPE = "transmission"
 DEFAULT_CLIENT_URL = "http://127.0.0.1:9091/transmission/rpc"
-DEFAULT_SECRET_SERVICE = "nekopull"
-DEFAULT_SECRET_USERNAME = "api"
+SECRET_SERVICE = "nekopull"
+SECRET_USERNAME = "api"
+SECRET_LABEL = "nekopull API key"
+APIKEY_STUB = "libsecret"
 
 
 @dataclass(slots=True)
@@ -381,15 +383,6 @@ class ClientConfig:
 
 
 @dataclass(slots=True)
-class SecretsConfig:
-    """Where to read the API key from when it is not in the config file."""
-
-    provider: str | None = None
-    service: str = DEFAULT_SECRET_SERVICE
-    username: str = DEFAULT_SECRET_USERNAME
-
-
-@dataclass(slots=True)
 class Config:
     apikey: str
     apikey_source: str
@@ -399,14 +392,30 @@ class Config:
     state_path: Path = STATE_PATH
 
 
-_SHOW_KEYS = {"media_id", "name", "levels", "resolutions", "groups", "allow_batch", "min_seeders"}
-_DEFAULT_KEYS = {"levels", "resolutions", "min_seeders", "allow_batch", "groups"}
+_SHOW_KEYS = {"media_id", "name", "levels", "codec", "resolutions", "groups", "allow_batch"}
+_DEFAULT_KEYS = {"levels", "codec", "resolutions", "allow_batch", "groups"}
 _CLIENT_KEYS = {"type", "url", "username", "password", "download_dir"}
-_SECRETS_KEYS = {"provider", "service", "username"}
-_SECRET_PROVIDERS = {"libsecret"}
+_CODECS = {"h264", "h265", "av1"}
 
 
-def load_config(path: Path | str = CONFIG_PATH) -> Config:
+def _as_list(value) -> list:
+    return list(value) if isinstance(value, (list, tuple)) else [value]
+
+
+def _codec_list(path: Path, where: str, value) -> list[str] | None:
+    if value is None:
+        return None
+    codecs = [str(item).lower() for item in _as_list(value)]
+    unknown = [codec for codec in codecs if codec not in _CODECS]
+    if unknown:
+        raise ConfigError(
+            f"{path}: {where} has unknown codec(s): {', '.join(unknown)}"
+            f" (known: {', '.join(sorted(_CODECS))})"
+        )
+    return codecs
+
+
+def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Config:
     path = Path(path)
     try:
         with path.open("rb") as handle:
@@ -416,13 +425,16 @@ def load_config(path: Path | str = CONFIG_PATH) -> Config:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path}: {exc}") from None
 
-    apikey, apikey_source = _resolve_apikey(path, raw)
+    apikey, apikey_source = _resolve_apikey(path, raw, migrate=migrate)
 
     defaults = Defaults()
     for key, value in raw.get("defaults", {}).items():
         if key not in _DEFAULT_KEYS:
             raise ConfigError(f"{path}: unknown defaults key `{key}`")
-        setattr(defaults, key, value)
+        if key == "codec":
+            defaults.codecs = _codec_list(path, "[defaults]", value) or []
+        else:
+            setattr(defaults, key, value)
 
     shows: list[Show] = []
     for index, entry in enumerate(raw.get("show", []), start=1):
@@ -439,10 +451,10 @@ def load_config(path: Path | str = CONFIG_PATH) -> Config:
                 media_id=str(media_id),
                 name=str(entry.get("name", media_id)),
                 levels=entry.get("levels"),
+                codecs=_codec_list(path, f"show #{index}", entry.get("codec")),
                 resolutions=entry.get("resolutions"),
                 groups=entry.get("groups"),
                 allow_batch=entry.get("allow_batch"),
-                min_seeders=entry.get("min_seeders"),
             )
         )
     if not shows:
@@ -468,53 +480,112 @@ def load_config(path: Path | str = CONFIG_PATH) -> Config:
     return Config(apikey, apikey_source, defaults, shows, client, state_path)
 
 
-def _resolve_apikey(path: Path, raw: dict) -> tuple[str, str]:
-    inline = raw.get("apikey")
-    secrets_raw = raw.get("secrets", {})
-    unknown = set(secrets_raw) - _SECRETS_KEYS
-    if unknown:
-        raise ConfigError(f"{path}: unknown secrets keys: {', '.join(sorted(unknown))}")
+def _resolve_apikey(path: Path, raw: dict, *, migrate: bool) -> tuple[str, str]:
+    value = raw.get("apikey")
+    if not value:
+        raise ConfigError(f"{path}: `apikey` is required")
 
-    if inline:
-        return str(inline), "config file"
-
-    secrets = SecretsConfig(
-        provider=secrets_raw.get("provider"),
-        service=secrets_raw.get("service", DEFAULT_SECRET_SERVICE),
-        username=secrets_raw.get("username", DEFAULT_SECRET_USERNAME),
-    )
-    if not secrets.provider:
+    if value == APIKEY_STUB:
+        stored = read_libsecret()
+        if stored:
+            return stored, f"libsecret ({SECRET_SERVICE})"
         raise ConfigError(
-            f"{path}: `apikey` is missing and no [secrets] provider is configured"
+            f"{path}: no API key in libsecret. Put the key back as apikey = \"...\" "
+            "and nekopull will store it for you."
         )
-    if secrets.provider not in _SECRET_PROVIDERS:
-        raise ConfigError(
-            f"{path}: unsupported secrets provider `{secrets.provider}`"
-            f" (known: {', '.join(sorted(_SECRET_PROVIDERS))})"
-        )
-    return read_libsecret(secrets.service, secrets.username), f"libsecret ({secrets.service})"
+
+    if migrate and secret_tool_available():
+        if store_libsecret(str(value)):
+            if stub_apikey_in_config(path):
+                LOG.info("API key copied to libsecret; config.toml now uses apikey = %r", APIKEY_STUB)
+                return str(value), "libsecret (migrated)"
+    return str(value), "config file"
 
 
-def read_libsecret(service: str, username: str) -> str:
-    """Read a stored secret through libsecret's `secret-tool`."""
-    if shutil.which("secret-tool") is None:
-        raise ConfigError("secret-tool not found; install libsecret to use [secrets]")
+def secret_tool_available() -> bool:
+    return shutil.which("secret-tool") is not None
+
+
+def read_libsecret() -> str | None:
+    """Return the stored API key, or None when there is none."""
+    if not secret_tool_available():
+        return None
     try:
         result = subprocess.run(
-            ["secret-tool", "lookup", "service", service, "username", username],
+            ["secret-tool", "lookup", "service", SECRET_SERVICE, "username", SECRET_USERNAME],
             capture_output=True,
             text=True,
             timeout=20,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise ConfigError(f"cannot query libsecret: {exc}") from exc
-    value = result.stdout.strip()
-    if result.returncode != 0 or not value:
-        raise ConfigError(
-            "no API key in libsecret; store it with:\n"
-            f"  secret-tool store --label='nekopull API key' service {service} username {username}"
+        LOG.warning("cannot query libsecret: %s", exc)
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def store_libsecret(apikey: str) -> bool:
+    """Write the API key to libsecret; True when it was stored."""
+    if not secret_tool_available():
+        return False
+    try:
+        result = subprocess.run(
+            [
+                "secret-tool",
+                "store",
+                f"--label={SECRET_LABEL}",
+                "service",
+                SECRET_SERVICE,
+                "username",
+                SECRET_USERNAME,
+            ],
+            input=apikey + "\n",
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
-    return value
+    except (OSError, subprocess.SubprocessError) as exc:
+        LOG.warning("cannot store the API key in libsecret: %s", exc)
+        return False
+    if result.returncode != 0:
+        LOG.warning("libsecret refused to store the API key: %s", result.stderr.strip())
+        return False
+    return True
+
+
+_APIKEY_LINE = re.compile(
+    r"""^(?P<lead>\s*apikey\s*=\s*)(?P<quote>["'])(?P<value>.*?)(?P=quote)(?P<tail>.*)$""",
+    re.MULTILINE,
+)
+
+
+def stub_apikey_in_config(path: Path) -> bool:
+    """Replace the literal API key in the config file with the stub."""
+    try:
+        text = path.read_text()
+    except OSError as exc:
+        LOG.warning("cannot read %s to move the API key: %s", path, exc)
+        return False
+    match = _APIKEY_LINE.search(text)
+    if not match:
+        LOG.warning("cannot find a single-line `apikey =` in %s", path)
+        return False
+    updated = (
+        text[: match.start()]
+        + f'{match.group("lead")}"{APIKEY_STUB}"'
+        + match.group("tail")
+        + text[match.end() :]
+    )
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        temporary.write_text(updated)
+        os.replace(temporary, path)
+    except OSError as exc:
+        LOG.warning("cannot rewrite %s: %s", path, exc)
+        temporary.unlink(missing_ok=True)
+        return False
+    return True
 
 
 # --- state -----------------------------------------------------------------
@@ -696,7 +767,7 @@ def passes_filters(release: Release, settings: Defaults) -> bool:
         return False
     if settings.levels and release.level not in settings.levels:
         return False
-    if release.seeders < settings.min_seeders:
+    if settings.codecs and release.codec not in settings.codecs:
         return False
     return True
 
@@ -878,8 +949,9 @@ def main(argv: list[str] | None = None) -> int:
         format="%(levelname)s %(message)s",
         stream=sys.stderr,
     )
+    migrate = options.command in {"run", "verify"} and not getattr(options, "dry_run", False)
     try:
-        config = load_config(options.config)
+        config = load_config(options.config, migrate=migrate)
     except ConfigError as exc:
         if options.command == "lookup":
             config = None  # lookup talks to nekoBT's public search only

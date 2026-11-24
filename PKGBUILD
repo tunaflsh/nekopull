@@ -7,6 +7,7 @@ arch=('any')
 url='https://github.com/tunaflsh/nekopull'
 license=('MIT')
 depends=('python')
+optdepends=('libsecret: keep the API key in the Secret Service')
 makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')  # run updpkgsums once the tag exists
