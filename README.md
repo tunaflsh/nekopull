@@ -1,20 +1,10 @@
 # nekopull
 
-Keeps the anime you follow up to date. nekopull checks nekoBT for new episodes
-of the shows you list, picks one release per episode, and hands the magnet link
-to your torrent client. Run it from a timer and forget about it.
+A small, dependency-free poller for nekoBT. It checks the shows you list for
+new episodes and hands the magnet link to your torrent client — Transmission
+today, others by adding a backend.
 
-## Features
-
-- **Your shows, not your search terms.** Each entry is bound to one show on
-  nekoBT, so a poll returns that show's releases and nothing else.
-- **One release per episode.** By default it takes the most complete subtitles
-  (nekoBT's *sub level*), then your preferred group, then the most seeders.
-- **No duplicates.** Grabbed releases and episodes are remembered in a small
-  SQLite database, so re-running never adds the same episode twice.
-- **Filters that matter for anime:** subtitle level, resolution, release group,
-  season batches, minimum seeders — globally and per show.
-- **`--dry-run`** prints what it would add, without touching your client.
+Python 3.11+. nekoBT only.
 
 ## Install
 
@@ -23,8 +13,6 @@ From the AUR (`nekopull`), or from a checkout:
 ```sh
 python3 -m venv .venv && .venv/bin/pip install .
 ```
-
-Python 3.11+. No runtime dependencies.
 
 ## Set up
 
@@ -82,11 +70,14 @@ Any key here can also be set on a single `[[show]]` to override it.
 
 | key | default | meaning |
 | --- | --- | --- |
-| `levels` | any | sub levels to accept, e.g. `[2, 3]`; see below |
+| `levels` | any | sub levels to accept, e.g. `[2, 3]` |
 | `resolutions` | `["1080p"]` | accepted resolutions; a release without one is skipped |
 | `groups` | `[]` | release groups to prefer (a preference, not a filter) |
 | `min_seeders` | `0` | skip releases with fewer seeders |
 | `allow_batch` | `false` | accept season batches |
+
+One release is taken per episode. When several match, the order of preference is
+your `groups`, then the highest accepted sub level, then the most seeders.
 
 **Sub levels** describe how much work went into the subtitles:
 
@@ -97,9 +88,8 @@ Any key here can also be set on a single `[[show]]` to override it.
 | 2 | small-scale fansubs |
 | 3 | full-scale fansubs |
 
-Higher is more complete, so when several levels are accepted the highest one
-wins. Leave `levels` unset to accept any. Only levels in the list are eligible —
-an untagged release is skipped when the list is set.
+Leave `levels` unset to accept any. Only listed levels are eligible, and an
+untagged release is skipped when the list is set.
 
 ### `[client]`
 
