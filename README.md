@@ -1,14 +1,16 @@
 # nekopull
 
-A small, dependency-free poller for nekoBT. It checks the shows you list for
+A small poller for nekoBT. It checks the shows you list for
 new episodes and hands the magnet link to your torrent client — Transmission
 today, others by adding a backend.
 
-Python 3.11+. nekoBT only.
+## Dependencies
+
+Python 3.11+
 
 ## Install
 
-From the AUR (`nekopull`), or from a checkout:
+`PKGBUILD` on Arch, or:
 
 ```sh
 python3 -m venv .venv && .venv/bin/pip install .
@@ -46,14 +48,18 @@ python3 -m venv .venv && .venv/bin/pip install .
    nekopull run
    ```
 
-4. Run it hourly:
+4. Run it daily:
 
    ```sh
    systemctl --user enable --now nekopull.timer
    ```
 
-   `nekopull.service` is a oneshot unit; `nekopull.timer` runs it once an hour
-   with a random delay. Logs go to the journal: `journalctl --user -u nekopull`.
+   `nekopull.service` is a oneshot unit and `nekopull.timer` fires it at 04:00
+   every day, with `Persistent=true` so a run missed while the machine was off
+   happens at the next boot. To pick another time, edit `OnCalendar=` in the
+   timer and run `systemctl --user daemon-reload`.
+
+   Logs go to the journal: `journalctl --user -u nekopull`.
 
 ## Configuration
 

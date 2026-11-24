@@ -1,9 +1,8 @@
 [Unit]
-Description=Run nekopull hourly
+Description=Run nekopull daily
 
 [Timer]
-OnCalendar=hourly
-RandomizedDelaySec=30min
+OnCalendar=*-*-* 04:00:00
 Persistent=true
 
 [Install]
