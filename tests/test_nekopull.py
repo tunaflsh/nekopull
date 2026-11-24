@@ -400,6 +400,21 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(config.shows[1].begin, (3, 7))
             self.assertEqual(config.defaults.merged(config.shows[0].overrides()).levels, [])
 
+    def test_name_is_optional(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n')
+            config = load_config(path, migrate=False)
+            self.assertIsNone(config.shows[0].name)
+
+    def test_list_falls_back_to_the_media_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(tmp, 'apikey = "k"\n\n[[show]]\nmedia_id = "s1"\n')
+            buffer = io.StringIO()
+            with mock.patch("nekopull.media_title", side_effect=nekopull.NekobtError("down")), \
+                    contextlib.redirect_stdout(buffer):
+                self.assertEqual(nekopull.command_list(load_config(path, migrate=False)), 0)
+            self.assertIn("s1", buffer.getvalue())
+
     def test_begin_in_defaults_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(
@@ -455,9 +470,11 @@ class ConfigTest(unittest.TestCase):
                 'batch = true\nbegin = "S01E05"\n',
             )
             buffer = io.StringIO()
-            with contextlib.redirect_stdout(buffer):
+            with mock.patch("nekopull.media_title", return_value="Canonical One"), \
+                    contextlib.redirect_stdout(buffer):
                 nekopull.command_list(load_config(path, migrate=False))
             output = buffer.getvalue()
+            self.assertIn("Canonical One", output)
             self.assertIn("type=['web_dl']", output)
             self.assertIn("batch=True", output)
             self.assertIn("begin=S01E05", output)

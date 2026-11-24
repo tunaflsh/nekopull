@@ -80,6 +80,18 @@ Everything except `[[show]]` is optional.
 | `apikey` | — | nekoBT API key; moved to libsecret automatically when available |
 | `state_path` | `~/.local/state/nekopull/state.db` | where grabbed episodes are recorded |
 
+### `[[show]]`
+
+One block per show.
+
+| key | meaning |
+| --- | --- |
+| `media_id` | required; find it with `nekopull lookup` |
+| `name` | optional label for logs and client tags — falls back to nekoBT's own title |
+| `begin` | first episode to consider, per show only |
+
+Keys from `[defaults]` may be set here too; they win over the defaults.
+
 ### `[defaults]` and per-show overrides
 
 Any key here can also be set on a single `[[show]]` to override it.

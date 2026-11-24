@@ -350,6 +350,54 @@ def fetch_releases(
     allow_batch: bool = False,
     private_magnet: bool = True,
 ) -> list[Release]:
+    """Fetch the releases nekoBT holds for ``media_id``."""
+    return _fetch(
+        apikey,
+        media_id,
+        limit=limit,
+        levels=levels,
+        codecs=codecs,
+        video_types=video_types,
+        allow_batch=allow_batch,
+        private_magnet=private_magnet,
+    )[0]
+
+
+def fetch_feed(
+    apikey: str,
+    media_id: str,
+    *,
+    limit: int = 100,
+    levels: list[int] | None = None,
+    codecs: list[str] | None = None,
+    video_types: list[str] | None = None,
+    allow_batch: bool = False,
+    private_magnet: bool = True,
+) -> tuple[list[Release], str | None]:
+    """Fetch releases plus the media's own title."""
+    return _fetch(
+        apikey,
+        media_id,
+        limit=limit,
+        levels=levels,
+        codecs=codecs,
+        video_types=video_types,
+        allow_batch=allow_batch,
+        private_magnet=private_magnet,
+    )
+
+
+def _fetch(
+    apikey: str,
+    media_id: str,
+    *,
+    limit: int = 100,
+    levels: list[int] | None = None,
+    codecs: list[str] | None = None,
+    video_types: list[str] | None = None,
+    allow_batch: bool = False,
+    private_magnet: bool = True,
+) -> tuple[list[Release], str | None]:
     """Fetch releases for ``media_id`` from nekoBT's search API.
 
     The response carries each torrent's episode ids plus the media's episode
@@ -383,10 +431,11 @@ def fetch_releases(
         for entry in media.get("episodes") or []
         if entry.get("id") is not None
     }
-    return [
+    releases = [
         release_from_item(item, episodes, private_magnet=private_magnet)
         for item in block.get("results") or []
     ]
+    return releases, media.get("title")
 
 
 def _video_type_ids(video_types: list[str]) -> list[int]:
@@ -398,6 +447,19 @@ def _codec_ids(codecs: list[str]) -> list[int]:
     """API ids for every requested codec, or none if one of them has no id."""
     mapped = [_CODEC_IDS[codec] for codec in codecs if codec in _CODEC_IDS]
     return mapped if len(mapped) == len(codecs) else []
+
+
+def media_title(apikey: str, media_id: str) -> str | None:
+    """The title nekoBT uses for a media id."""
+    payload = http_get(
+        f"https://nekobt.to/api/v1/media/{urllib.parse.quote(str(media_id))}",
+        headers={"Cookie": f"ssid={apikey}"},
+    )
+    try:
+        data = json.loads(payload).get("data") or {}
+    except json.JSONDecodeError:
+        return None
+    return data.get("title")
 
 
 def lookup_media(query: str, *, limit: int = 5) -> list[dict]:
@@ -456,7 +518,7 @@ class Defaults:
 @dataclass(slots=True)
 class Show:
     media_id: str
-    name: str
+    name: str | None = None
     levels: list[int] | None = None
     codecs: list[str] | None = None
     video_types: list[str] | None = None
@@ -645,6 +707,8 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
         media_id = entry.get("media_id")
         if not media_id:
             raise ConfigError(f"{path}: show #{index} is missing `media_id`")
+        if "name" in entry and not str(entry["name"]).strip():
+            raise ConfigError(f"{path}: show #{index}: `name` must not be empty")
         for boolean_key in ("batch", "private_magnet"):
             if boolean_key in entry and not isinstance(entry[boolean_key], bool):
                 raise ConfigError(
@@ -653,7 +717,7 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
         shows.append(
             Show(
                 media_id=str(media_id),
-                name=str(entry.get("name", media_id)),
+                name=entry.get("name"),
                 levels=entry.get("levels"),
                 codecs=_codec_list(path, f"show #{index}", entry.get("codec")),
                 video_types=_video_type_list(path, f"show #{index}", entry.get("type")),
@@ -1055,8 +1119,9 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
         client = None if options.dry_run else make_client(config.client)
         for show in selected:
             settings = config.defaults.merged(show.overrides())
+            label = show.name or show.media_id
             try:
-                releases = fetch_releases(
+                releases, feed_title = fetch_feed(
                     config.apikey,
                     show.media_id,
                     levels=settings.levels,
@@ -1066,16 +1131,17 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                     private_magnet=settings.private_magnet,
                 )
             except NekobtError as exc:
-                LOG.error("%s: %s", show.name, exc)
+                LOG.error("%s: %s", label, exc)
                 failures += 1
                 continue
+            label = show.name or feed_title or show.media_id
             picks = select(
                 releases, settings, media_id=show.media_id, state=state, begin=show.begin
             )
-            LOG.info("%s: %d releases, %d new episode(s)", show.name, len(releases), len(picks))
+            LOG.info("%s: %d releases, %d new episode(s)", label, len(releases), len(picks))
             for release in picks:
                 description = (
-                    f"{show.name} S{release.season:02d}E{release.episode:02d}"
+                    f"{label} S{release.season:02d}E{release.episode:02d}"
                     f" [{release.resolution or '?'}"
                     f"{', L' + str(release.level) if release.level is not None else ''}]"
                     f" {release.title[:70]}"
@@ -1086,9 +1152,9 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
                     continue
                 assert client is not None
                 try:
-                    result = client.add(release.magnet, tags=[show.name])
+                    result = client.add(release.magnet, tags=[label])
                 except ClientError as exc:
-                    LOG.error("%s: %s", show.name, exc)
+                    LOG.error("%s: %s", label, exc)
                     failures += 1
                     break
                 LOG.info("%s (%s)", description, result)
@@ -1102,7 +1168,7 @@ def command_run(config: Config, options: argparse.Namespace) -> int:
 def _select_shows(config: Config, wanted: list[str] | None) -> list[Show]:
     if not wanted:
         return config.shows
-    lookup = {show.name.lower(): show for show in config.shows}
+    lookup = {show.name.lower(): show for show in config.shows if show.name}
     lookup.update({show.media_id.lower(): show for show in config.shows})
     chosen = []
     for name in wanted:
@@ -1132,7 +1198,16 @@ def command_lookup(options: argparse.Namespace) -> int:
 
 
 def command_list(config: Config) -> int:
+    resolved: dict[str, str] = {}
     for show in config.shows:
+        display_name = show.name
+        if display_name is None:
+            if show.media_id not in resolved:
+                try:
+                    resolved[show.media_id] = media_title(config.apikey, show.media_id) or ""
+                except NekobtError:
+                    resolved[show.media_id] = ""
+            display_name = resolved[show.media_id] or show.media_id
         display = {"video_types": "type", "allow_batch": "batch"}
         overrides = {
             display.get(key, key): value
@@ -1142,7 +1217,7 @@ def command_list(config: Config) -> int:
         if show.begin is not None:
             overrides["begin"] = show.begin
         extra = " ".join(f"{key}={_format_value(value)}" for key, value in overrides.items())
-        print(f"{show.media_id:>10}  {show.name}" + (f"  ({extra})" if extra else ""))
+        print(f"{show.media_id:>10}  {display_name}" + (f"  ({extra})" if extra else ""))
     return 0
 
 
@@ -1160,7 +1235,8 @@ def command_verify(config: Config) -> int:
         print(f"nekoBT: {exc}", file=sys.stderr)
         failures += 1
     else:
-        print(f"api key: works ({len(releases)} release(s) for {config.shows[0].name})")
+        first = config.shows[0]
+        print(f"api key: works ({len(releases)} release(s) for {first.name or first.media_id})")
     try:
         version = make_client(config.client).version()
     except ClientError as exc:
