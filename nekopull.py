@@ -366,8 +366,7 @@ class Show:
 DEFAULT_CLIENT_TYPE = "transmission"
 DEFAULT_CLIENT_URL = "http://127.0.0.1:9091/transmission/rpc"
 SECRET_SERVICE = "nekopull"
-SECRET_USERNAME = "api"
-SECRET_LABEL = "nekopull API key"
+SECRET_APIKEY = "apikey"
 APIKEY_STUB = "libsecret"
 
 
@@ -425,7 +424,17 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path}: {exc}") from None
 
-    apikey, apikey_source = _resolve_apikey(path, raw, migrate=migrate)
+    stash = migrate and secret_tool_available()
+    stubbed: list[str] = []
+    apikey = _credential(
+        path, raw, "apikey", "apikey", stash=stash, stubbed=stubbed, required=True
+    )
+    if str(raw.get("apikey")) == APIKEY_STUB:
+        apikey_source = f"libsecret ({SECRET_SERVICE}/{SECRET_APIKEY})"
+    elif "apikey" in stubbed:
+        apikey_source = "libsecret (migrated)"
+    else:
+        apikey_source = "config file"
 
     defaults = Defaults()
     for key, value in raw.get("defaults", {}).items():
@@ -464,55 +473,76 @@ def load_config(path: Path | str = CONFIG_PATH, *, migrate: bool = True) -> Conf
     unknown = set(client_raw) - _CLIENT_KEYS
     if unknown:
         raise ConfigError(f"{path}: unknown client keys: {', '.join(sorted(unknown))}")
+    client_type = client_raw.get("type", DEFAULT_CLIENT_TYPE)
+    if client_type not in CLIENTS:
+        raise ConfigError(
+            f"{path}: unsupported client `{client_type}` (known: {', '.join(sorted(CLIENTS))})"
+        )
     client = ClientConfig(
-        type=client_raw.get("type", DEFAULT_CLIENT_TYPE),
+        type=client_type,
         url=client_raw.get("url", DEFAULT_CLIENT_URL),
-        username=client_raw.get("username", ""),
-        password=client_raw.get("password", ""),
+        username=_credential(
+            path, client_raw, "username", "client-username", stash=stash, stubbed=stubbed
+        ),
+        password=_credential(
+            path, client_raw, "password", "client-password", stash=stash, stubbed=stubbed
+        ),
         download_dir=client_raw.get("download_dir"),
     )
-    if client.type not in CLIENTS:
+    if stubbed and not _stub_config(path, stubbed):
         raise ConfigError(
-            f"{path}: unsupported client `{client.type}` (known: {', '.join(sorted(CLIENTS))})"
+            f"{path}: stored credentials in libsecret but could not rewrite the file;"
+            " replace them with the stub by hand"
         )
 
     state_path = Path(raw.get("state_path", path.parent / "state.db"))
     return Config(apikey, apikey_source, defaults, shows, client, state_path)
 
 
-def _resolve_apikey(path: Path, raw: dict, *, migrate: bool) -> tuple[str, str]:
-    value = raw.get("apikey")
-    if not value:
-        raise ConfigError(f"{path}: `apikey` is required")
-
+def _credential(
+    path: Path,
+    table: dict,
+    key: str,
+    name: str,
+    *,
+    stash: bool,
+    stubbed: list[str],
+    required: bool = False,
+) -> str:
+    value = table.get(key)
+    if value is None or value == "":
+        if required:
+            raise ConfigError(f"{path}: `{key}` is required")
+        return ""
+    value = str(value)
     if value == APIKEY_STUB:
-        stored = read_libsecret()
-        if stored:
-            return stored, f"libsecret ({SECRET_SERVICE})"
+        stored = read_secret(name)
+        if stored is not None:
+            return stored
         raise ConfigError(
-            f"{path}: no API key in libsecret. Put the key back as apikey = \"...\" "
-            "and nekopull will store it for you."
+            f"{path}: no {name} in libsecret. Put it back as {key} = \"...\""
+            " and nekopull will store it for you."
         )
-
-    if migrate and secret_tool_available():
-        if store_libsecret(str(value)):
-            if stub_apikey_in_config(path):
-                LOG.info("API key copied to libsecret; config.toml now uses apikey = %r", APIKEY_STUB)
-                return str(value), "libsecret (migrated)"
-    return str(value), "config file"
+    if stash and store_secret(name, value):
+        stubbed.append(key)
+    return value
 
 
 def secret_tool_available() -> bool:
     return shutil.which("secret-tool") is not None
 
 
-def read_libsecret() -> str | None:
-    """Return the stored API key, or None when there is none."""
+def _secret_command(*args: str) -> list[str]:
+    return ["secret-tool", *args, "service", SECRET_SERVICE, "username"]
+
+
+def read_secret(name: str) -> str | None:
+    """Return the stored credential, or None when it is not there."""
     if not secret_tool_available():
         return None
     try:
         result = subprocess.run(
-            ["secret-tool", "lookup", "service", SECRET_SERVICE, "username", SECRET_USERNAME],
+            [*_secret_command("lookup"), name],
             capture_output=True,
             text=True,
             timeout=20,
@@ -525,8 +555,8 @@ def read_libsecret() -> str | None:
     return result.stdout.strip() or None
 
 
-def store_libsecret(apikey: str) -> bool:
-    """Write the API key to libsecret; True when it was stored."""
+def store_secret(name: str, value: str) -> bool:
+    """Write a credential to libsecret; True when it was stored."""
     if not secret_tool_available():
         return False
     try:
@@ -534,57 +564,51 @@ def store_libsecret(apikey: str) -> bool:
             [
                 "secret-tool",
                 "store",
-                f"--label={SECRET_LABEL}",
+                f"--label=nekopull {name}",
                 "service",
                 SECRET_SERVICE,
                 "username",
-                SECRET_USERNAME,
+                name,
             ],
-            input=apikey + "\n",
+            input=value + "\n",
             capture_output=True,
             text=True,
             timeout=20,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        LOG.warning("cannot store the API key in libsecret: %s", exc)
+        LOG.warning("cannot store %s in libsecret: %s", name, exc)
         return False
     if result.returncode != 0:
-        LOG.warning("libsecret refused to store the API key: %s", result.stderr.strip())
+        LOG.warning("libsecret refused to store %s: %s", name, result.stderr.strip())
         return False
     return True
 
 
-_APIKEY_LINE = re.compile(
-    r"""^(?P<lead>\s*apikey\s*=\s*)(?P<quote>["'])(?P<value>.*?)(?P=quote)(?P<tail>.*)$""",
-    re.MULTILINE,
-)
-
-
-def stub_apikey_in_config(path: Path) -> bool:
-    """Replace the literal API key in the config file with the stub."""
+def _stub_config(path: Path, keys: list[str]) -> bool:
+    """Replace migrated credential values with the stub, in one write."""
     try:
         text = path.read_text()
     except OSError as exc:
-        LOG.warning("cannot read %s to move the API key: %s", path, exc)
+        LOG.warning("cannot read %s to move credentials: %s", path, exc)
         return False
-    match = _APIKEY_LINE.search(text)
-    if not match:
-        LOG.warning("cannot find a single-line `apikey =` in %s", path)
-        return False
-    updated = (
-        text[: match.start()]
-        + f'{match.group("lead")}"{APIKEY_STUB}"'
-        + match.group("tail")
-        + text[match.end() :]
-    )
+    for key in keys:
+        pattern = re.compile(
+            rf'^(?P<lead>\s*{re.escape(key)}\s*=\s*)(?P<quote>["\']).*?(?P=quote)',
+            re.MULTILINE,
+        )
+        text, count = pattern.subn(lambda match: f'{match.group("lead")}"{APIKEY_STUB}"', text, count=1)
+        if not count:
+            LOG.warning("cannot find `%s =` in %s", key, path)
+            return False
     temporary = path.with_name(path.name + ".tmp")
     try:
-        temporary.write_text(updated)
+        temporary.write_text(text)
         os.replace(temporary, path)
     except OSError as exc:
         LOG.warning("cannot rewrite %s: %s", path, exc)
         temporary.unlink(missing_ok=True)
         return False
+    LOG.info("credentials moved to libsecret; %s now uses the stub", path)
     return True
 
 

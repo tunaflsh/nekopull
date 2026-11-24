@@ -335,6 +335,63 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(config.apikey, "stored")
             self.assertIn("libsecret", config.apikey_source)
 
+    def test_client_credentials_migrated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[client]\nusername = "box"\npassword = "hunter2"\n\n'
+                '[[show]]\nmedia_id = "s1"\n',
+            )
+            with mock.patch("nekopull.secret_tool_available", return_value=True), \
+                    mock.patch(
+                        "nekopull.subprocess.run",
+                        return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+                    ) as run:
+                config = load_config(path)
+            self.assertEqual(config.client.username, "box")
+            self.assertEqual(config.client.password, "hunter2")
+            self.assertEqual(run.call_count, 3)  # apikey, username, password
+            text = path.read_text()
+            self.assertIn('apikey = "libsecret"', text)
+            self.assertIn('username = "libsecret"', text)
+            self.assertIn('password = "libsecret"', text)
+
+    def test_client_credentials_read_from_libsecret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "libsecret"\n\n[client]\nusername = "libsecret"\n'
+                'password = "libsecret"\n\n[[show]]\nmedia_id = "s1"\n',
+            )
+            stored = {"apikey": "key", "client-username": "box", "client-password": "hunter2"}
+
+            def fake_run(args, **kwargs):
+                return SimpleNamespace(returncode=0, stdout=stored[args[-1]] + "\n", stderr="")
+
+            with mock.patch("nekopull.secret_tool_available", return_value=True), \
+                    mock.patch("nekopull.subprocess.run", side_effect=fake_run):
+                config = load_config(path)
+            self.assertEqual(config.apikey, "key")
+            self.assertEqual(config.client.username, "box")
+            self.assertEqual(config.client.password, "hunter2")
+
+    def test_client_credential_missing_from_libsecret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_config(
+                tmp,
+                'apikey = "k"\n\n[client]\npassword = "libsecret"\n\n'
+                '[[show]]\nmedia_id = "s1"\n',
+            )
+            def fake_run(args, **kwargs):  # stores succeed, lookups miss
+                code = 0 if "store" in args else 1
+                return SimpleNamespace(returncode=code, stdout="", stderr="")
+
+            with mock.patch("nekopull.secret_tool_available", return_value=True), \
+                    mock.patch("nekopull.subprocess.run", side_effect=fake_run):
+                with self.assertRaises(ConfigError) as caught:
+                    load_config(path)
+            self.assertIn("client-password", str(caught.exception))
+
     def test_stub_without_stored_key(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_config(

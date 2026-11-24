@@ -95,7 +95,8 @@ Any key here can also be set on a single `[[show]]` to override it.
 | `allow_batch` | `false` | accept season batches |
 
 One release is taken per episode. When several match, the order of preference is
-your `groups`, then the highest accepted sub level, then the most seeders.
+your `groups`, then the highest accepted sub level, then the most seeders. There
+is no minimum-seeder threshold — seeders only break ties.
 
 **Sub levels** describe how much work went into the subtitles:
 
@@ -121,23 +122,26 @@ untagged release is skipped when the list is set.
 To support another client, implement `version()` and `add(magnet, tags)` in a
 `TorrentClient` subclass and register it in `CLIENTS`; nothing else changes.
 
-### Where the API key lives
+### Where credentials live
 
-If `secret-tool` (libsecret) is installed, the first `run` or `verify` moves the
-key out of the file: it is stored in the Secret Service and the line is
-rewritten to
+If `secret-tool` (libsecret) is installed, the first `run` or `verify` moves
+every credential it finds into the Secret Service and leaves the stub behind:
 
 ```toml
 apikey = "libsecret"
+
+[client]
+username = "libsecret"
+password = "libsecret"
 ```
 
-From then on the key is read back at start-up, so `config.toml` holds no secret.
-Without libsecret the value stays in the file and is used as is; `--dry-run`
-never rewrites anything.
+Entries are stored as `service nekopull username <name>`, where `<name>` is
+`apikey`, `client-username` or `client-password`. From then on the values are
+read back at start-up, so `config.toml` holds no secrets. Without libsecret the
+values stay in the file and are used as is; `--dry-run` never rewrites anything.
 
-If the keyring is reset, nekopull reports that the stored key is gone — put a
-real value back in the file and it will be stored again. The stash is stored as
-`service nekopull username api` in case you want to inspect it.
+If the keyring is reset, nekopull names the missing entry — put a real value
+back in the file and it will be stored again.
 
 ## Commands
 

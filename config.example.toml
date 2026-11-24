@@ -16,9 +16,11 @@ allow_batch = false
 [client]
 type = "transmission"
 url = "http://127.0.0.1:9091/transmission/rpc"
+download_dir = "/data/torrents/anime"
+# HTTP auth, if your client needs it. Written here in plain text it is moved to
+# libsecret on the next `run`/`verify` and replaced with "libsecret".
 username = ""
 password = ""
-download_dir = "/data/torrents/anime"
 
 # One block per show; find ids with `nekopull lookup "title"`.
 [[show]]
